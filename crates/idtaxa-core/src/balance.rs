@@ -48,7 +48,10 @@ pub fn cap_groups(groups: &[u32], kmers: &[Vec<u32>], cap: usize) -> Vec<usize> 
                 .unwrap();
             let mut chosen = vec![first];
             // min distance of each member to the chosen set
-            let mut mind: Vec<f64> = members.iter().map(|&m| 1.0 - jaccard(&kmers[m], &kmers[first])).collect();
+            let mut mind: Vec<f64> = members
+                .iter()
+                .map(|&m| 1.0 - jaccard(&kmers[m], &kmers[first]))
+                .collect();
             while chosen.len() < cap {
                 let mut best = None;
                 for (t, &m) in members.iter().enumerate() {

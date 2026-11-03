@@ -130,7 +130,10 @@ pub fn read_taxonomy_tsv(path: &Path) -> Result<HashMap<String, String>> {
 /// Reference sequences with lineages, either from a taxonomy TSV or from
 /// the FASTA headers (whole header after the id, or the id itself when it
 /// contains ';', e.g. DADA2-formatted PR2/SILVA files).
-pub fn read_reference(fasta: &Path, taxonomy: Option<&Path>) -> Result<(Vec<SeqRecord>, Vec<String>)> {
+pub fn read_reference(
+    fasta: &Path,
+    taxonomy: Option<&Path>,
+) -> Result<(Vec<SeqRecord>, Vec<String>)> {
     let recs = read_all(fasta)?;
     let lineages = match taxonomy {
         Some(t) => {

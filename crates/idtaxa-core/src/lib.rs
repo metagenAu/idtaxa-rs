@@ -5,16 +5,22 @@
 //! Licensed GPL-3.0-or-later (a port of GPL-3 DECIPHER source).
 
 pub mod balance;
+pub mod calibration;
 pub mod classify;
+pub mod clean;
+pub mod consensus;
 pub mod error;
+pub mod eval;
 pub mod import;
 pub mod io;
 pub mod kmer;
 pub mod model;
+pub mod output;
+pub mod region;
 pub mod stats;
 pub mod taxonomy;
 pub mod train;
 
-pub use classify::{Classification, ClassifyParams, Classifier, Orientation, Scratch, Strand};
+pub use classify::{Classification, Classifier, ClassifyParams, Orientation, Scratch, Strand};
 pub use error::{Error, Result};
 pub use model::{Model, FORMAT_VERSION};

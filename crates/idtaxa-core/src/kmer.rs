@@ -270,7 +270,11 @@ impl KmerEncoder {
                 let mut rev = Vec::with_capacity(seq.len());
                 if seq.len() >= k {
                     let shift = 2 * (k as u32 - 1);
-                    let mask: u64 = if k == 32 { u64::MAX } else { (1u64 << (2 * k)) - 1 };
+                    let mask: u64 = if k == 32 {
+                        u64::MAX
+                    } else {
+                        (1u64 << (2 * k)) - 1
+                    };
                     let mut code: u64 = 0;
                     let mut rcode: u64 = 0;
                     let mut run = 0usize;
@@ -381,7 +385,12 @@ mod tests {
                     .collect();
                 let (nv, nn) = naive(&seq, k);
                 let got = e.encode(&seq);
-                assert_eq!(got.unique, nv, "k={k} seq={}", String::from_utf8_lossy(&seq));
+                assert_eq!(
+                    got.unique,
+                    nv,
+                    "k={k} seq={}",
+                    String::from_utf8_lossy(&seq)
+                );
                 assert_eq!(got.n_valid, nn);
                 // reverse complement in a single pass equals encoding the RC
                 let (f, r) = e.encode_both(&seq);
@@ -435,7 +444,10 @@ mod tests {
         assert_eq!(e.encode(b"NAC").n_valid, 0);
         assert_eq!(e.pattern().as_deref(), Some("101"));
         // contiguous pattern collapses to a contiguous encoder
-        assert_eq!(KmerEncoder::spaced("111").unwrap(), KmerEncoder::contiguous(3).unwrap());
+        assert_eq!(
+            KmerEncoder::spaced("111").unwrap(),
+            KmerEncoder::contiguous(3).unwrap()
+        );
         assert!(KmerEncoder::spaced("011").is_err());
         assert!(KmerEncoder::spaced("1x1").is_err());
         let (f, r) = e.encode_both(b"ACGTTGCA");

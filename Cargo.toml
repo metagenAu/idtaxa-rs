@@ -20,7 +20,7 @@ rayon = "1"
 rand = "0.8"
 rand_xoshiro = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-needletail = { version = "0.5", default-features = false, features = ["flate2"] }
+needletail = { version = "0.5" }
 flate2 = "1"
 clap = { version = "4", features = ["derive"] }
 redb = "2"

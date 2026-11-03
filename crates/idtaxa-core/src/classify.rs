@@ -122,7 +122,9 @@ impl ClassifyParams {
             ));
         }
         if self.bootstraps < 1 {
-            return Err(Error::InvalidParameter("bootstraps must be at least one".into()));
+            return Err(Error::InvalidParameter(
+                "bootstraps must be at least one".into(),
+            ));
         }
         if !(0.5..=1.0).contains(&self.min_descend) {
             return Err(Error::InvalidParameter(
@@ -130,11 +132,15 @@ impl ClassifyParams {
             ));
         }
         if !(self.sample_exponent > 0.0 && self.sample_exponent <= 1.0) {
-            return Err(Error::InvalidParameter("sample exponent must be in (0, 1]".into()));
+            return Err(Error::InvalidParameter(
+                "sample exponent must be in (0, 1]".into(),
+            ));
         }
         if let Some((lo, hi)) = self.full_length {
             if !(lo >= 0.0 && hi > lo) {
-                return Err(Error::InvalidParameter("fullLength bounds must satisfy 0 <= lo < hi".into()));
+                return Err(Error::InvalidParameter(
+                    "fullLength bounds must satisfy 0 <= lo < hi".into(),
+                ));
             }
         }
         Ok(())
@@ -186,7 +192,11 @@ impl Classification {
     /// Number of lineage entries (from Root) whose confidence is at least
     /// `threshold`; DECIPHER assigns at least Root.
     pub fn n_above(&self, threshold: f64) -> usize {
-        let n = self.confidences.iter().take_while(|&&c| c >= threshold).count();
+        let n = self
+            .confidences
+            .iter()
+            .take_while(|&&c| c >= threshold)
+            .count();
         n.max(1)
     }
 
@@ -221,8 +231,11 @@ pub struct Scratch {
     matches: Vec<bool>,
     hits_desc: Vec<f64>,
     groups: Vec<GroupTop>,
-    member: Vec<bool>,
     hmat: Vec<f64>,
+    top_gi: Vec<u32>,
+    occ_off: Vec<u32>,
+    occ_fill: Vec<u32>,
+    occ: Vec<u32>,
     ranges: Vec<Range<u32>>,
 }
 
@@ -250,8 +263,11 @@ impl Scratch {
             matches: Vec::new(),
             hits_desc: Vec::new(),
             groups: Vec::new(),
-            member: Vec::new(),
             hmat: Vec::new(),
+            top_gi: vec![u32::MAX; model.n_seqs()],
+            occ_off: Vec::new(),
+            occ_fill: Vec::new(),
+            occ: Vec::new(),
             ranges: Vec::new(),
         }
     }
@@ -293,7 +309,6 @@ pub struct Classifier<'m> {
     min_s: usize,
     /// Number of k-mers per training sequence (native order) for fullLength.
     lens: Vec<u32>,
-    nonneg_idf: bool,
     /// group sizes (number of training sequences per leaf group)
     group_size: Vec<u32>,
 }
@@ -331,8 +346,6 @@ impl<'m> Classifier<'m> {
         let lens: Vec<u32> = (0..model.n_seqs() as u32)
             .map(|i| model.seq_kmers(i).len() as u32)
             .collect();
-        let nonneg_idf = (0..model.n_index_kmers()).all(|s| model.slot_idf(s) >= 0.0)
-            && model.meta.idf_default >= 0.0;
         let mut group_size = vec![0u32; model.n_nodes()];
         for i in 0..model.n_seqs() as u32 {
             group_size[model.seq_group(i) as usize] += 1;
@@ -343,7 +356,6 @@ impl<'m> Classifier<'m> {
             min_s: minimum_sample_size(model),
             params,
             lens,
-            nonneg_idf,
             group_size,
         })
     }
@@ -399,7 +411,9 @@ impl<'m> Classifier<'m> {
         };
         let first = fwd.as_ref().or(rev.as_ref()).unwrap();
         // samples = ceiling(L^0.47) with L = number of non-NA k-mers
-        let mut s = (first.n_valid as f64).powf(self.params.sample_exponent).ceil() as usize;
+        let mut s = (first.n_valid as f64)
+            .powf(self.params.sample_exponent)
+            .ceil() as usize;
         if s < self.min_s {
             s = self.min_s;
         }
@@ -408,8 +422,13 @@ impl<'m> Classifier<'m> {
             return Classification::unclassified();
         }
         // B = as.integer(min(5 * length(kmers) / S, bootstraps))
-        let b = (5.0 * n_unique as f64 / s as f64).min(bootstraps as f64) as u32;
-        let b = b.max(1);
+        // (adaptive reruns ask for more replicates than the cap allows and
+        // bypass the 5 * L / S limit)
+        let b = if bootstraps > self.params.bootstraps {
+            bootstraps
+        } else {
+            ((5.0 * n_unique as f64 / s as f64).min(bootstraps as f64) as u32).max(1)
+        };
 
         let mut best: Option<(RunResult, Orientation)> = None;
         if let Some(f) = &fwd {
@@ -471,7 +490,13 @@ impl<'m> Classifier<'m> {
 
     /// Tree descent: returns the children (of the stopping node) whose
     /// subtrees are scored in the leaf phase.
-    fn descend(&self, kmers: &[u32], b: u32, rng: &mut Xoshiro256PlusPlus, sc: &mut Scratch) -> Vec<u32> {
+    fn descend(
+        &self,
+        kmers: &[u32],
+        b: u32,
+        rng: &mut Xoshiro256PlusPlus,
+        sc: &mut Scratch,
+    ) -> Vec<u32> {
         let m = self.model;
         let mut k = 0u32;
         loop {
@@ -540,7 +565,10 @@ impl<'m> Classifier<'m> {
                     if !half {
                         return subtrees.to_vec();
                     }
-                    let any: Vec<u32> = (0..nc).filter(|&c| hits[c] > 0).map(|c| subtrees[c]).collect();
+                    let any: Vec<u32> = (0..nc)
+                        .filter(|&c| hits[c] > 0)
+                        .map(|c| subtrees[c])
+                        .collect();
                     if any.is_empty() {
                         return subtrees.to_vec();
                     }
@@ -710,64 +738,63 @@ impl<'m> Classifier<'m> {
             });
         }
 
-        // per-replicate hits of each group's top sequence: process groups in
-        // decreasing total score so groups that cannot win any replicate
-        // can be skipped (valid when all IDF weights are >= 0).
-        let mut order: Vec<usize> = (0..ng).collect();
-        order.sort_by(|&a, &b2| {
-            sc.groups[b2]
-                .score
-                .partial_cmp(&sc.groups[a].score)
-                .unwrap()
-                .then(a.cmp(&b2))
-        });
+        // per-replicate hits of each group's top sequence. Rather than
+        // intersecting every top sequence with the query, a second pass over
+        // the postings adds idf to hits[g][rep] for every replicate in which
+        // a k-mer shared with top sequence g was sampled.
         let bu = b as usize;
+        for (gi, g) in sc.groups.iter().enumerate() {
+            sc.top_gi[g.seq as usize] = gi as u32;
+        }
+        // replicate occurrences per query k-mer (CSR)
+        sc.occ_off.clear();
+        sc.occ_off.push(0);
+        for i in 0..nq {
+            let last = *sc.occ_off.last().unwrap();
+            sc.occ_off.push(last + sc.counts[i]);
+        }
+        sc.occ.clear();
+        sc.occ.resize(total, 0);
+        sc.occ_fill.clear();
+        sc.occ_fill.extend_from_slice(&sc.occ_off[..nq]);
+        for (t, &qi) in sc.samp.iter().enumerate() {
+            let pos = &mut sc.occ_fill[qi as usize];
+            sc.occ[*pos as usize] = (t / s) as u32;
+            *pos += 1;
+        }
         sc.hmat.clear();
         sc.hmat.resize(ng * bu, 0.0);
-        let mut evaluated = vec![false; ng];
-        let mut rep_max = vec![f64::NEG_INFINITY; bu];
-        let mut min_rep_max = f64::NEG_INFINITY;
-        let gexp = self.params.group_size_exponent;
-        for &gi in &order {
-            let gt = sc.groups[gi];
-            let scale = if gexp != 0.0 {
-                (self.group_size[gt.group as usize].max(1) as f64).powf(-gexp)
-            } else {
-                1.0
-            };
-            if self.nonneg_idf && gexp == 0.0 && gt.score < min_rep_max {
-                break;
+        for i in 0..nq {
+            if sc.counts[i] == 0 || sc.qslot[i] == u32::MAX {
+                continue;
             }
-            // membership of the top sequence's k-mers among query k-mers
-            sc.member.clear();
-            sc.member.resize(nq, false);
-            let tk = m.seq_kmers(gt.seq);
-            let mut j = 0usize;
-            for (qi, &x) in kmers.iter().enumerate() {
-                j += tk[j..].partition_point(|&y| y < x);
-                if j >= tk.len() {
-                    break;
-                }
-                if tk[j] == x {
-                    sc.member[qi] = true;
-                }
-            }
-            let row = &mut sc.hmat[gi * bu..(gi + 1) * bu];
-            for (rep, slot) in row.iter_mut().enumerate() {
-                let mut h = 0.0;
-                for &qi in &sc.samp[rep * s..(rep + 1) * s] {
-                    if sc.member[qi as usize] {
-                        h += sc.qidf[qi as usize];
+            let w = sc.qidf[i];
+            let occ = &sc.occ[sc.occ_off[i] as usize..sc.occ_off[i + 1] as usize];
+            let post = m.postings(sc.qslot[i] as usize);
+            for r in &sc.ranges {
+                let a = post.partition_point(|&x| x < r.start);
+                let z = a + post[a..].partition_point(|&x| x < r.end);
+                for &id in &post[a..z] {
+                    let gi = sc.top_gi[id as usize] as usize;
+                    if gi < ng && sc.groups[gi].seq == id && sc.stamp[id as usize] == epoch {
+                        let row = &mut sc.hmat[gi * bu..(gi + 1) * bu];
+                        for &rep in occ {
+                            row[rep as usize] += w;
+                        }
                     }
                 }
-                *slot = h * scale;
-                if *slot > rep_max[rep] {
-                    rep_max[rep] = *slot;
-                }
             }
-            evaluated[gi] = true;
-            min_rep_max = rep_max.iter().cloned().fold(f64::INFINITY, f64::min);
         }
+        let gexp = self.params.group_size_exponent;
+        if gexp != 0.0 {
+            for (gi, g) in sc.groups.iter().enumerate() {
+                let scale = (self.group_size[g.group as usize].max(1) as f64).powf(-gexp);
+                sc.hmat[gi * bu..(gi + 1) * bu]
+                    .iter_mut()
+                    .for_each(|x| *x *= scale);
+            }
+        }
+        let evaluated = vec![true; ng];
 
         // totHits: per replicate, the group with the max hits (random ties,
         // as R's max.col) receives hits/davg

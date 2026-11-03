@@ -291,10 +291,14 @@ impl Model {
             || raw.fraction.len() != n_nodes
             || raw.decision.len() != n_nodes
         {
-            return Err(Error::InvalidModel("per-node arrays have inconsistent lengths".into()));
+            return Err(Error::InvalidModel(
+                "per-node arrays have inconsistent lengths".into(),
+            ));
         }
         if raw.cross_index.len() != n_seqs || raw.seq_names.len() != n_seqs {
-            return Err(Error::InvalidModel("per-sequence arrays have inconsistent lengths".into()));
+            return Err(Error::InvalidModel(
+                "per-sequence arrays have inconsistent lengths".into(),
+            ));
         }
         if n_seqs >= u32::MAX as usize {
             return Err(Error::InvalidModel("too many training sequences".into()));
@@ -303,7 +307,9 @@ impl Model {
         let n_kmers = encoder.n_kmers();
         for km in &raw.seq_kmers {
             if km.windows(2).any(|w| w[0] >= w[1]) {
-                return Err(Error::InvalidModel("training k-mers must be sorted and unique".into()));
+                return Err(Error::InvalidModel(
+                    "training k-mers must be sorted and unique".into(),
+                ));
             }
             if km.last().is_some_and(|&x| (x as u64) >= n_kmers) {
                 return Err(Error::InvalidModel("k-mer code out of range for K".into()));
@@ -358,8 +364,10 @@ impl Model {
             ));
         }
 
-        let seq_lists: Vec<Vec<u32>> =
-            order.iter().map(|&o| raw.seq_kmers[o as usize].clone()).collect();
+        let seq_lists: Vec<Vec<u32>> = order
+            .iter()
+            .map(|&o| raw.seq_kmers[o as usize].clone())
+            .collect();
         let seq_group: Vec<u32> = order.iter().map(|&o| raw.cross_index[o as usize]).collect();
         let (seq_off, seq_kmers) = csr(&seq_lists);
         drop(seq_lists);
@@ -461,7 +469,10 @@ impl Model {
         };
         let mut model = Model {
             taxonomy: full_paths(&raw.taxa, &raw.parents),
-            meta: ModelMeta { taxa: raw.taxa, ..meta },
+            meta: ModelMeta {
+                taxa: raw.taxa,
+                ..meta
+            },
             parents: raw.parents.into(),
             levels: levels.into(),
             child_off: child_off.into(),
@@ -566,7 +577,9 @@ impl Model {
         let json = serde_json::to_vec(&meta)?;
         let meta_off = pos as u64;
         w.write_all(&json).map_err(io)?;
-        let mut f = w.into_inner().map_err(|e| Error::io(path, e.into_error()))?;
+        let mut f = w
+            .into_inner()
+            .map_err(|e| Error::io(path, e.into_error()))?;
         use std::io::{Seek, SeekFrom};
         let mut header = [0u8; HEADER_LEN];
         header[0..8].copy_from_slice(MAGIC);
@@ -583,7 +596,9 @@ impl Model {
     /// Memory-map a native model file.
     pub fn load(path: &Path) -> Result<Model> {
         if cfg!(target_endian = "big") {
-            return Err(Error::InvalidModel("big-endian platforms are not supported".into()));
+            return Err(Error::InvalidModel(
+                "big-endian platforms are not supported".into(),
+            ));
         }
         let f = File::open(path).map_err(|e| Error::io(path, e))?;
         // SAFETY: the file is opened read-only; concurrent modification of a
@@ -685,7 +700,8 @@ impl Model {
             && *self.idx_off.last().unwrap() as usize == self.idx_post.len()
             && *self.dk_off.last().unwrap() as usize == self.dk_kmers.len()
             && *self.dkw_off.last().unwrap() as usize == self.dk_w.len()
-            && (self.dense_slot.is_empty() || self.dense_slot.len() as u64 == 1u64 << (2 * self.meta.k));
+            && (self.dense_slot.is_empty()
+                || self.dense_slot.len() as u64 == 1u64 << (2 * self.meta.k));
         if !ok {
             return Err(Error::InvalidModel("inconsistent array sizes".into()));
         }
@@ -922,7 +938,11 @@ impl Model {
 
 /// Build CSR inverted index (sorted keys, offsets, postings) from CSR
 /// per-sequence k-mer lists.
-fn build_index(seq_off: &[u64], seq_kmers: &[u32], k: u32) -> Result<(Vec<u32>, Vec<u64>, Vec<u32>)> {
+fn build_index(
+    seq_off: &[u64],
+    seq_kmers: &[u32],
+    k: u32,
+) -> Result<(Vec<u32>, Vec<u64>, Vec<u32>)> {
     let n_seqs = seq_off.len() - 1;
     if k <= DENSE_MAX_K {
         let n = 1usize << (2 * k);
@@ -930,7 +950,9 @@ fn build_index(seq_off: &[u64], seq_kmers: &[u32], k: u32) -> Result<(Vec<u32>, 
         for &x in seq_kmers {
             counts[x as usize + 1] += 1;
         }
-        let keys: Vec<u32> = (0..n as u32).filter(|&x| counts[x as usize + 1] > 0).collect();
+        let keys: Vec<u32> = (0..n as u32)
+            .filter(|&x| counts[x as usize + 1] > 0)
+            .collect();
         for i in 1..=n {
             counts[i] += counts[i - 1];
         }

@@ -233,7 +233,11 @@ impl TreeBuilder<'_> {
             let q: Profile = support.iter().map(|&km| (km, acc[&km] / dsum)).collect();
             let q_support: Vec<u32> = q.iter().map(|x| x.0).collect();
 
-            let max_nnz = profiles.iter().map(|p| p.iter().filter(|x| x.1 > 0.0).count()).max().unwrap_or(0);
+            let max_nnz = profiles
+                .iter()
+                .map(|p| p.iter().filter(|x| x.1 > 0.0).count())
+                .max()
+                .unwrap_or(0);
             let record_kmers = (max_nnz as f64) * 0.10;
             let mut iters: Vec<OrderIter> = profiles
                 .iter()
@@ -285,12 +289,19 @@ pub fn train<S: AsRef<[u8]> + Sync>(
 ) -> Result<(Model, TrainReport)> {
     let n_in = seqs.len();
     if n_in < 2 {
-        return Err(Error::InvalidParameter("at least two training sequences are required".into()));
+        return Err(Error::InvalidParameter(
+            "at least two training sequences are required".into(),
+        ));
     }
     if lineages.len() != n_in || names.len() != n_in {
-        return Err(Error::InvalidParameter("sequences, lineages and names must have equal length".into()));
+        return Err(Error::InvalidParameter(
+            "sequences, lineages and names must have equal length".into(),
+        ));
     }
-    if !(opts.min_fraction > 0.0) || opts.max_fraction <= opts.min_fraction || opts.max_fraction >= 1.0 {
+    if !(opts.min_fraction > 0.0)
+        || opts.max_fraction <= opts.min_fraction
+        || opts.max_fraction >= 1.0
+    {
         return Err(Error::InvalidParameter(
             "require 0 < minFraction < maxFraction < 1".into(),
         ));
@@ -310,7 +321,10 @@ pub fn train<S: AsRef<[u8]> + Sync>(
             opts.k.unwrap_or_else(|| auto_k(seqs, opts.n).0) as usize,
             opts.seed_pattern.as_deref(),
         )?;
-        let km: Vec<Vec<u32>> = seqs.par_iter().map(|s| pre.encode(s.as_ref()).unique).collect();
+        let km: Vec<Vec<u32>> = seqs
+            .par_iter()
+            .map(|s| pre.encode(s.as_ref()).unique)
+            .collect();
         selected = crate::balance::cap_groups(&tmp_tree.cross_index, &km, cap as usize);
         dropped = n_in - selected.len();
     }
@@ -324,7 +338,9 @@ pub fn train<S: AsRef<[u8]> + Sync>(
         (Some(p), _) => (KmerEncoder::spaced(p)?.k() as u32, false, false),
         (None, Some(k)) => {
             if !(1..=15).contains(&k) {
-                return Err(Error::InvalidParameter("K can be at most 15 (and at least 1)".into()));
+                return Err(Error::InvalidParameter(
+                    "K can be at most 15 (and at least 1)".into(),
+                ));
             }
             (k, false, false)
         }
@@ -336,10 +352,16 @@ pub fn train<S: AsRef<[u8]> + Sync>(
     let encoder = KmerEncoder::from_model(k as usize, opts.seed_pattern.as_deref())?;
     let n_kmers = encoder.n_kmers();
     if opts.verbose {
-        eprintln!("[train] {l} sequences, {} taxonomy nodes, K = {k}", tree.len());
+        eprintln!(
+            "[train] {l} sequences, {} taxonomy nodes, K = {k}",
+            tree.len()
+        );
     }
 
-    let kmers: Vec<Vec<u32>> = seqs_sel.par_iter().map(|s| encoder.encode(s).unique).collect();
+    let kmers: Vec<Vec<u32>> = seqs_sel
+        .par_iter()
+        .map(|s| encoder.encode(s).unique)
+        .collect();
     if let Some(i) = kmers.iter().position(|k| k.is_empty()) {
         return Err(Error::InvalidParameter(format!(
             "all training sequences must have at least one k-mer (sequence '{}' has none)",
@@ -410,7 +432,20 @@ pub fn train<S: AsRef<[u8]> + Sync>(
                     h.update(&(it as u64).to_le_bytes());
                     h.update(&opts.seed.to_le_bytes());
                     let mut rng = Xoshiro256PlusPlus::seed_from_u64(h.digest());
-                    (i, descend_train(&tree, &decision, &fraction, &kmers[i], i, opts.min_fraction, b, &mut rng, &in_subtree))
+                    (
+                        i,
+                        descend_train(
+                            &tree,
+                            &decision,
+                            &fraction,
+                            &kmers[i],
+                            i,
+                            opts.min_fraction,
+                            b,
+                            &mut rng,
+                            &in_subtree,
+                        ),
+                    )
                 })
                 .collect();
             // apply updates in sequence order
@@ -435,7 +470,11 @@ pub fn train<S: AsRef<[u8]> + Sync>(
         }
         if opts.verbose {
             let n_bad = incorrect.iter().filter(|x| **x != Some(false)).count();
-            eprintln!("[train] iteration {}: {} sequences not yet correct", it + 1, n_bad);
+            eprintln!(
+                "[train] iteration {}: {} sequences not yet correct",
+                it + 1,
+                n_bad
+            );
         }
     }
 
@@ -545,7 +584,11 @@ fn descend_train(
         }
         let chosen;
         if subtrees.len() > 1 {
-            let f = if fraction[k].is_nan() { min_fraction } else { fraction[k] };
+            let f = if fraction[k].is_nan() {
+                min_fraction
+            } else {
+                fraction[k]
+            };
             let s = (n as f64 * f).ceil() as usize;
             let mut matches = vec![false; n];
             let mut j = 0usize;

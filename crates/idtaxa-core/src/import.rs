@@ -60,17 +60,27 @@ struct ExportMeta {
 fn read_i32(path: &Path) -> Result<Vec<i32>> {
     let b = fs::read(path).map_err(|e| Error::io(path, e))?;
     if b.len() % 4 != 0 {
-        return Err(Error::Import(format!("{} is not a multiple of 4 bytes", path.display())));
+        return Err(Error::Import(format!(
+            "{} is not a multiple of 4 bytes",
+            path.display()
+        )));
     }
-    Ok(b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect())
+    Ok(b.chunks_exact(4)
+        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+        .collect())
 }
 
 fn read_f64(path: &Path) -> Result<Vec<f64>> {
     let b = fs::read(path).map_err(|e| Error::io(path, e))?;
     if b.len() % 8 != 0 {
-        return Err(Error::Import(format!("{} is not a multiple of 8 bytes", path.display())));
+        return Err(Error::Import(format!(
+            "{} is not a multiple of 8 bytes",
+            path.display()
+        )));
     }
-    Ok(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
+    Ok(b.chunks_exact(8)
+        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .collect())
 }
 
 /// Read a DECIPHER export directory into [`RawModel`] (0-based indices).
@@ -82,7 +92,10 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
         return Err(Error::Import(format!("unexpected format '{}'", m.format)));
     }
     if m.version != 1 {
-        return Err(Error::Import(format!("unsupported export version {}", m.version)));
+        return Err(Error::Import(format!(
+            "unsupported export version {}",
+            m.version
+        )));
     }
     if m.alphabet.as_ref().is_some_and(|a| !a.is_null()) {
         return Err(Error::Import(
@@ -90,8 +103,15 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
         ));
     }
     let n = m.taxa.len();
-    if m.taxonomy.len() != n || m.parents.len() != n || m.fraction.len() != n || m.children.len() != n || m.levels.len() != n {
-        return Err(Error::Import("per-node vectors have inconsistent lengths".into()));
+    if m.taxonomy.len() != n
+        || m.parents.len() != n
+        || m.fraction.len() != n
+        || m.children.len() != n
+        || m.levels.len() != n
+    {
+        return Err(Error::Import(
+            "per-node vectors have inconsistent lengths".into(),
+        ));
     }
     if m.taxonomy.first().map(String::as_str) != Some("Root;") {
         return Err(Error::Import("first taxonomy entry must be 'Root;'".into()));
@@ -110,7 +130,10 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
     for (i, ch) in children.iter().enumerate() {
         for &c in ch {
             if c as usize >= n || parents[c as usize] != i as u32 {
-                return Err(Error::Import(format!("children/parents mismatch at node {}", i + 1)));
+                return Err(Error::Import(format!(
+                    "children/parents mismatch at node {}",
+                    i + 1
+                )));
             }
         }
     }
@@ -120,10 +143,14 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
     let lens = read_i32(&dir.join("kmer_lengths.bin"))?;
     let flat = read_i32(&dir.join("kmers.bin"))?;
     if lens.len() != m.crossIndex.len() {
-        return Err(Error::Import("kmer_lengths.bin and crossIndex differ in length".into()));
+        return Err(Error::Import(
+            "kmer_lengths.bin and crossIndex differ in length".into(),
+        ));
     }
     if lens.iter().map(|&x| x as i64).sum::<i64>() != flat.len() as i64 {
-        return Err(Error::Import("kmers.bin length does not match kmer_lengths.bin".into()));
+        return Err(Error::Import(
+            "kmers.bin length does not match kmer_lengths.bin".into(),
+        ));
     }
     let mut seq_kmers = Vec::with_capacity(lens.len());
     let mut pos = 0usize;
@@ -132,7 +159,9 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
             .iter()
             .map(|&x| {
                 if x < 1 || x as i64 > n_kmers {
-                    Err(Error::Import(format!("k-mer code {x} out of range for K = {k}")))
+                    Err(Error::Import(format!(
+                        "k-mer code {x} out of range for K = {k}"
+                    )))
                 } else {
                     Ok((x - 1) as u32)
                 }
@@ -147,7 +176,9 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
     let dkm = read_i32(&dir.join("decision_kmers.bin"))?;
     let dw = read_f64(&dir.join("decision_weights.bin"))?;
     if dl.len() != n {
-        return Err(Error::Import("decision_lengths.bin must have one entry per node".into()));
+        return Err(Error::Import(
+            "decision_lengths.bin must have one entry per node".into(),
+        ));
     }
     let mut decision = Vec::with_capacity(n);
     let (mut kp, mut wp) = (0usize, 0usize);
@@ -168,7 +199,9 @@ pub fn read_decipher_export(dir: &Path) -> Result<RawModel> {
         decision.push(Some((km, w)));
     }
     if kp != dkm.len() || wp != dw.len() {
-        return Err(Error::Import("decision k-mer files have trailing data".into()));
+        return Err(Error::Import(
+            "decision k-mer files have trailing data".into(),
+        ));
     }
 
     let fraction: Vec<f64> = m.fraction.iter().map(|f| f.unwrap_or(f64::NAN)).collect();
@@ -226,7 +259,8 @@ pub fn import_decipher(dir: &Path) -> Result<Model> {
     let raw = read_decipher_export(dir)?;
     let tax_check = crate::taxonomy::full_paths(&raw.taxa, &raw.parents);
     let meta_path = dir.join("meta.json");
-    let meta: serde_json::Value = serde_json::from_slice(&fs::read(&meta_path).map_err(|e| Error::io(&meta_path, e))?)?;
+    let meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(&meta_path).map_err(|e| Error::io(&meta_path, e))?)?;
     if let Some(t) = meta.get("taxonomy").and_then(|t| t.as_array()) {
         for (i, v) in t.iter().enumerate() {
             if v.as_str() != Some(tax_check[i].as_str()) {

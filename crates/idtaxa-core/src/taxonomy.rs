@@ -46,9 +46,10 @@ pub fn clean_lineage(raw: &str) -> Result<String> {
         } else {
             // push full utf8 char
             let ch_len = utf8_len(bytes[i]);
-            s.push_str(std::str::from_utf8(&bytes[i..i + ch_len]).map_err(|_| {
-                Error::Taxonomy(format!("invalid UTF-8 in lineage '{raw}'"))
-            })?);
+            s.push_str(
+                std::str::from_utf8(&bytes[i..i + ch_len])
+                    .map_err(|_| Error::Taxonomy(format!("invalid UTF-8 in lineage '{raw}'")))?,
+            );
             i += ch_len;
         }
     }
@@ -228,8 +229,15 @@ mod tests {
         assert_eq!(
             t.taxonomy,
             vec![
-                "Root;", "Root;A;", "Root;A;B;", "Root;A;B;C;", "Root;A;D;", "Root;A;D;E;",
-                "Root;F;", "Root;F;G;", "Root;F;G;H;"
+                "Root;",
+                "Root;A;",
+                "Root;A;B;",
+                "Root;A;B;C;",
+                "Root;A;D;",
+                "Root;A;D;E;",
+                "Root;F;",
+                "Root;F;G;",
+                "Root;F;G;H;"
             ]
         );
         assert_eq!(t.cross_index, vec![3, 5, 8, 3, 2]);

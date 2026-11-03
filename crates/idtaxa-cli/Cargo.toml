@@ -19,6 +19,8 @@ serde.workspace = true
 serde_json.workspace = true
 redb.workspace = true
 xxhash-rust.workspace = true
+rand.workspace = true
+rand_xoshiro.workspace = true
 flate2.workspace = true
 
 [dev-dependencies]
