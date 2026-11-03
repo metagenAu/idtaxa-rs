@@ -1,0 +1,4 @@
+target/
+*.idtx
+/work/
+__pycache__/

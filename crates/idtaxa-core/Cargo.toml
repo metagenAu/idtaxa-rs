@@ -1,0 +1,28 @@
+[package]
+name = "idtaxa-core"
+description = "Core library for idtaxa-rs: a scalable Rust port of the IDTAXA taxonomic classifier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytemuck.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+rand.workspace = true
+rand_xoshiro.workspace = true
+xxhash-rust.workspace = true
+needletail.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "classify"
+harness = false

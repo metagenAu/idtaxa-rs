@@ -1,0 +1,25 @@
+[package]
+name = "idtaxa-cli"
+description = "Command-line interface for idtaxa-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "idtaxa"
+path = "src/main.rs"
+
+[dependencies]
+idtaxa-core = { path = "../idtaxa-core" }
+anyhow.workspace = true
+clap.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+redb.workspace = true
+xxhash-rust.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
