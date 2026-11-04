@@ -1,0 +1,32 @@
+[package]
+name = "idtaxa"
+version = "0.1.0"
+edition = "2021"
+description = "Primer-aware IDTAXA taxonomic classification for amplicon metabarcoding (16S, ITS, 18S)"
+license = "MIT"
+repository = "https://github.com/metagenAu/idtaxa-rs"
+readme = "README.md"
+keywords = ["bioinformatics", "metabarcoding", "taxonomy", "microbiome", "idtaxa"]
+categories = ["science", "command-line-utilities"]
+
+[lib]
+name = "idtaxa"
+path = "src/lib.rs"
+
+[[bin]]
+name = "idtaxa"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bincode = "1.3"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+rand = { version = "0.8", features = ["small_rng"] }
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
