@@ -262,14 +262,36 @@ selection is a union of ranges.
 * Similarity `sims = Σ_b hits[b, top_selected] / davg` (reported by
   `idtaxa-rs` divided by `B` as `max_similarity` basis).
 
-`idtaxa-rs` computes the same quantities with the inverted index: total
-sample counts per query k-mer give `sumHits` in one pass over the postings
-restricted to the selected ranges; a second pass adds the IDF of each
-sampled k-mer to the replicates in which it was drawn, only for each
-group's top sequence. Groups with no hit at all cannot win a replicate and
-are not materialised; if no training sequence shares any sampled k-mer,
-DECIPHER's random choice among all candidate groups is reproduced (all
-confidences 0).
+`idtaxa-rs` computes the same quantities without the replicates ×
+training-sequences matrix:
+
+* **`sumHits`** comes from the total sample count of each query k-mer
+  times its IDF, accumulated in one pass over the inverted index restricted
+  to the selected subtree ID ranges. K-mers present in more than half of the
+  training sequences are stored as complement lists (sequences *lacking*
+  them): their weight is added to every kept sequence and subtracted for the
+  listed ones.
+* **Per-replicate hits** are needed only for each group's top sequence. A
+  bitset of the query k-mers it shares is built from the same postings.
+  The exact per-replicate winners are found with **dominance pruning**
+  against the leading group `L` (maximum `sumHits`). For a group `g`, let
+  `gain` be the k-mers that `g` shares and `L` lacks (plus those `L` has
+  with non-positive weight) and `loss` the positive-weight k-mers `L` has
+  and `g` lacks. In a replicate where no `gain` k-mer was sampled but some
+  `loss` k-mer was, `g` scores strictly below `L` and can neither win nor
+  tie. Only the remaining replicates are scored exactly (summing in sample
+  order, so equal k-mer sets give bit-identical values and ties are
+  detected exactly).
+* The unpruned computation is kept as a reference path and tested to give
+  identical classifications (`tests/engine.rs`).
+* Groups whose top sequence shares no sampled k-mer cannot win a
+  replicate and are dropped. If no training sequence shares any sampled
+  k-mer, DECIPHER's random choice among all candidate groups is
+  reproduced (all confidences 0).
+* With negative IDF weights (k-mers in essentially every class), DECIPHER
+  can choose a zero-score sequence as a group's top where all touched
+  members score below zero. This case is ignored: such a group cannot win
+  a replicate with positive hits.
 
 ### 3.5 Confidence
 
@@ -354,8 +376,15 @@ agreement is measured in `docs/benchmarks.md`.
   sampled) in each training sequence; maxima over the whole reference and
   within each lineage node's subtree. Cut-offs per rank maximise balanced
   accuracy between "taxon present" and "taxon absent" held-out queries from
-  a clade-exclusion split (`calibrate --novelty-holdout`). `novelty_rank`
-  is the deepest rank whose cut-off is met at every rank above.
+  a clade-exclusion split (`calibrate --novelty-holdout`); a rank needs at
+  least `--min-novelty-examples` (20) known and novel examples, otherwise
+  it gets no cut-off. `novelty_rank` reports the **first rank at which the
+  query is no longer consistent** with a known taxon, i.e. the rank below
+  the deepest one whose cut-off is met at every rank above (`none` = never
+  novel). **Discrepancy with brief**: the brief uses both "deepest rank at
+  which the query looks novel" and "deepest rank consistent with a known
+  taxon"; the first novel rank is reported, and `--truncate-novel` keeps
+  the consistent ranks above it.
 * **Region extraction**: IUPAC set-intersection matching, no indels,
   mismatches ≤ `--max-mismatch`, with the `--three-prime-exact` 3'-terminal
   bases exact; the reverse primer is searched as its reverse complement

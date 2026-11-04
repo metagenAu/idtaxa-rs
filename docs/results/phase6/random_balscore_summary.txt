@@ -1,0 +1,43 @@
+Configuration standard (threshold 60), 1356 held-out sequences
+rank            present absent  accuracy  misclass  overclass underclass error
+level1             1356      0     0.858     0.002       NaN      0.139   0.002
+level2             1356      0     0.856     0.004       NaN      0.140   0.004
+level3             1356      0     0.855     0.004       NaN      0.140   0.004
+level4             1356      0     0.855     0.004       NaN      0.140   0.004
+level5             1352      4     0.850     0.006     0.000      0.144   0.006
+level6             1346     10     0.817     0.013     0.200      0.170   0.014
+level7             1327     29     0.797     0.020     0.103      0.184   0.021
+level8             1051    305     0.587     0.052     0.138      0.361   0.072
+level9              803    553     0.473     0.057     0.215      0.469   0.122
+
+Configuration balanced (threshold 60), 1356 held-out sequences
+rank            present absent  accuracy  misclass  overclass underclass error
+level1             1356      0     0.803     0.009       NaN      0.188   0.009
+level2             1356      0     0.802     0.010       NaN      0.188   0.010
+level3             1356      0     0.801     0.011       NaN      0.188   0.011
+level4             1356      0     0.799     0.011       NaN      0.190   0.011
+level5             1352      4     0.794     0.013     0.000      0.194   0.013
+level6             1346     10     0.750     0.023     0.100      0.227   0.024
+level7             1327     29     0.718     0.036     0.034      0.246   0.036
+level8             1051    305     0.451     0.145     0.125      0.404   0.140
+level9              803    553     0.268     0.196     0.210      0.537   0.201
+
+Comparison standard -> balanced (difference B - A, 95% paired bootstrap CI over held-out sequences)
+  depth 1 correct  A=0.8584 B=0.8031 diff=-0.0553 [-0.0686, -0.0442] *
+  depth 1 error    A=0.0022 B=0.0088 diff=+0.0066 [+0.0029, +0.0118] *
+  depth 2 correct  A=0.8562 B=0.8016 diff=-0.0546 [-0.0671, -0.0420] *
+  depth 2 error    A=0.0037 B=0.0103 diff=+0.0066 [+0.0029, +0.0111] *
+  depth 3 correct  A=0.8555 B=0.8009 diff=-0.0546 [-0.0664, -0.0428] *
+  depth 3 error    A=0.0044 B=0.0111 diff=+0.0066 [+0.0029, +0.0118] *
+  depth 4 correct  A=0.8555 B=0.7994 diff=-0.0560 [-0.0686, -0.0435] *
+  depth 4 error    A=0.0044 B=0.0111 diff=+0.0066 [+0.0029, +0.0111] *
+  depth 5 correct  A=0.8473 B=0.7913 diff=-0.0560 [-0.0693, -0.0442] *
+  depth 5 error    A=0.0059 B=0.0125 diff=+0.0066 [+0.0029, +0.0118] *
+  depth 6 correct  A=0.8112 B=0.7448 diff=-0.0664 [-0.0804, -0.0531] *
+  depth 6 error    A=0.0140 B=0.0236 diff=+0.0096 [+0.0029, +0.0162] *
+  depth 7 correct  A=0.7795 B=0.7028 diff=-0.0767 [-0.0914, -0.0612] *
+  depth 7 error    A=0.0214 B=0.0361 diff=+0.0147 [+0.0074, +0.0229] *
+  depth 8 correct  A=0.4550 B=0.3496 diff=-0.1055 [-0.1239, -0.0863] *
+  depth 8 error    A=0.0715 B=0.1401 diff=+0.0686 [+0.0531, +0.0841] *
+  depth 9 correct  A=0.2802 B=0.1586 diff=-0.1217 [-0.1423, -0.1018] *
+  depth 9 error    A=0.1217 B=0.2013 diff=+0.0796 [+0.0619, +0.0981] *

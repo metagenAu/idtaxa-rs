@@ -152,23 +152,27 @@ absent from the reference count as overclassification when assigned
 
 ### Recommended configuration
 
-The recommendation is based on the measurements in
-[`docs/benchmarks.md`](docs/benchmarks.md#phase-6-accuracy-extensions):
+Based on the measurements in
+[`docs/benchmarks.md`](docs/benchmarks.md#phase-6-accuracy-extensions)
+(PR2 18S V4, random leave-out and genus-exclusion held-out sets):
 
-1. `extract-region` with your amplicon primers: train on the amplicon
-   region, not on full-length references.
-2. `clean-ref --drop-placeholder-labels`, with one round of problem-sequence
-   review.
-3. `train` in standard mode.
-4. `calibrate` against a held-out set, including a clade-exclusion set for
-   novelty cut-offs.
-5. `classify --calibration calibration.json --novelty-flag`;
-   `--adaptive-bootstraps` is optional, see the benchmark.
-6. Placement plus `consensus` on the novelty-flagged subset.
+| step | recommendation | evidence |
+|---|---|---|
+| `extract-region` | optional; train on the amplicon region and check the coverage report | neutral on PR2 V4 at matched error; `--rescue` raises species coverage from 58% to 73% |
+| `clean-ref --drop-placeholder-labels` | **yes** | species error 15.4% → 8.7% at threshold 60; species accuracy at 5% error 28.7% → 41.3% |
+| problem-sequence removal | no (review the file instead) | raises upper-rank error by 1 point |
+| `train` | standard mode | spaced seeds neutral; balanced training is a trade-off |
+| `calibrate` | **yes**, on a held-out set that mixes random and clade-exclusion sequences | raw confidence is strongly under-confident; thresholds learned on known taxa only give 15–19% order/family error on unseen genera |
+| `classify --calibration --novelty-flag` | **yes**; `--truncate-novel` when overclassification matters most | truncation halves genus/species overclassification of unseen genera (28.8% → 13.8%) at a cost of 10 points of genus accuracy on known taxa |
+| `--adaptive-bootstraps` | no | 30% of queries re-run, no gain |
+| `--mode balanced` (scoring) | no | genus accuracy at 5% error 51.6% → 15.4% |
+| placement + `consensus` | on the novelty-flagged subset | implemented; not benchmarked end-to-end here (EPA-ng unavailable) |
 
-The full pipeline is `scripts/workflow.sh`. Extensions that did not
-measurably help on the benchmark are kept as options but not recommended;
-see the benchmark document for the numbers.
+End-to-end: `scripts/workflow.sh reference.fasta taxonomy.tsv asvs.fasta out/ [refpkg]`
+runs extract-region → clean-ref → split → train → validate → calibrate →
+classify (calibrated, novelty flag; `ADAPTIVE=N` to add adaptive
+bootstraps) → placement on the flagged subset (`scripts/run_placement.sh`)
+→ consensus.
 
 ## Known differences from DECIPHER
 

@@ -1,0 +1,1 @@
+extract-region: 7999 extracted, 2226 rescued, 4775 dropped (no primer site: 4449, length filter: 326)

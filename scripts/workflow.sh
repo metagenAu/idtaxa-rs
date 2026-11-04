@@ -22,9 +22,10 @@ idtaxa extract-region --ref "$REF" "${taxarg[@]}" --fwd "$FWD" --rev "$REV" \
   --output "$OUT/region.fasta" --report "$OUT/region_report.tsv"
 regtax=(); [ "$TAX" != "-" ] && regtax=(--taxonomy "$TAX")
 
-# 2. label cleaning: truncate placeholder ranks, 1 round of problem-sequence removal
+# 2. label cleaning: truncate placeholder ranks (problem sequences are only
+#    reported for review: dropping them did not help in docs/benchmarks.md)
 idtaxa clean-ref --ref "$OUT/region.fasta" "${regtax[@]}" --drop-placeholder-labels \
-  --retrain-rounds 1 --output-prefix "$OUT/cleaned"
+  --output-prefix "$OUT/cleaned"
 
 # 3. held-out splits for calibration (random) and novelty (clade exclusion at genus)
 idtaxa split --ref "$OUT/cleaned.fasta" --taxonomy "$OUT/cleaned_taxonomy.tsv" \
@@ -36,13 +37,19 @@ idtaxa split --ref "$OUT/rand_train.fasta" --taxonomy "$OUT/rand_train.tsv" \
 idtaxa train --ref "$OUT/clade_train.fasta" --taxonomy "$OUT/clade_train.tsv" --output "$OUT/calib_model.idtx" --threads "$THREADS"
 idtaxa validate --model "$OUT/calib_model.idtx" --holdout "$OUT/rand_holdout.fasta" --taxonomy "$OUT/rand_holdout.tsv" \
   --output-prefix "$OUT/validate"
-idtaxa calibrate --model "$OUT/calib_model.idtx" --holdout "$OUT/rand_holdout.fasta" --taxonomy "$OUT/rand_holdout.tsv" \
+# calibrate on random + clade-exclusion held-out sequences so thresholds
+# account for taxa missing from the reference
+cat "$OUT/rand_holdout.fasta" "$OUT/clade_holdout.fasta" > "$OUT/calib_holdout.fasta"
+cat "$OUT/rand_holdout.tsv" "$OUT/clade_holdout.tsv" > "$OUT/calib_holdout.tsv"
+idtaxa calibrate --model "$OUT/calib_model.idtx" --holdout "$OUT/calib_holdout.fasta" --taxonomy "$OUT/calib_holdout.tsv" \
   --novelty-holdout "$OUT/clade_holdout.fasta" --novelty-taxonomy "$OUT/clade_holdout.tsv" \
   --target-error "${TARGET_ERROR:-0.05}" --output "$OUT/calibration.json" --reliability "$OUT/reliability.tsv"
 
-# 5. classify all ASVs with the calibrated model
+# 5. classify all ASVs with the calibrated model. Adaptive bootstraps are
+#    available (ADAPTIVE=1000) but gave no measurable gain in the benchmarks.
+adapt=(); [ -n "${ADAPTIVE:-}" ] && adapt=(--adaptive-bootstraps "$ADAPTIVE")
 idtaxa classify --model "$OUT/calib_model.idtx" --input "$ASVS" --output "$OUT/asv_taxonomy.tsv" \
-  --calibration "$OUT/calibration.json" --novelty-flag --adaptive-bootstraps 500 --full-confidences \
+  --calibration "$OUT/calibration.json" --novelty-flag "${adapt[@]}" --full-confidences \
   --threads "$THREADS" --cache "$OUT/cache.redb"
 
 # 6. placement on the novelty-flagged subset + consensus (needs a reference package)
