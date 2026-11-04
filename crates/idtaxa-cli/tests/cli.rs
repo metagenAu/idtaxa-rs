@@ -513,3 +513,63 @@ fn validate_calibrate_and_extensions_run() {
     let info = run(&["info", "--model", s(&d.join("spaced.idtx"))]);
     assert!(info.contains("seed_pattern\t11011011011"));
 }
+
+#[test]
+fn consensus_with_synthetic_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("cons.tsv");
+    run(&[
+        "consensus",
+        "--idtaxa",
+        s(&data("consensus_idtaxa.tsv")),
+        "--placement",
+        s(&data("consensus_gappa_per_query.tsv")),
+        "--jplace",
+        s(&data("consensus_epa.jplace")),
+        "--taxonomy",
+        s(&data("consensus_taxonomy.tsv")),
+        "--placement-min-lwr",
+        "0.9",
+        "--max-pendant",
+        "0.5",
+        "--output",
+        s(&out),
+    ]);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let rows: HashMap<&str, Vec<&str>> = text
+        .lines()
+        .skip(1)
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (f[0], f)
+        })
+        .collect();
+    // asv1: both agree to Alveolata (placement goes deeper)
+    assert_eq!(rows["asv1"][1], "Eukaryota;TSAR;Alveolata");
+    assert_eq!(rows["asv1"][2], "both;both;both");
+    // asv2: IDTAXA to TSAR, placement deeper -> agree to TSAR, no conflict
+    assert_eq!(rows["asv2"][1], "Eukaryota;TSAR");
+    assert!(!rows["asv2"][7].contains("disagree"));
+    // asv3: conflict at rank 2, long pendant branch flagged
+    assert_eq!(rows["asv3"][1], "Eukaryota");
+    assert!(rows["asv3"][7].contains("disagree"));
+    assert!(rows["asv3"][7].contains("long_pendant"));
+    // a placement taxonomy not in the shared taxonomy file is an error
+    let bad = dir.path().join("tax.tsv");
+    std::fs::write(&bad, "r1\tEukaryota;TSAR\n").unwrap();
+    let res = bin()
+        .args([
+            "consensus",
+            "--idtaxa",
+            s(&data("consensus_idtaxa.tsv")),
+            "--placement",
+            s(&data("consensus_gappa_per_query.tsv")),
+            "--taxonomy",
+            s(&bad),
+            "--output",
+            s(&out),
+        ])
+        .output()
+        .unwrap();
+    assert!(!res.status.success());
+}

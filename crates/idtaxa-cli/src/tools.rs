@@ -142,6 +142,14 @@ pub struct ValidateArgs {
     /// Adaptive bootstraps for configuration B
     #[arg(long)]
     compare_adaptive: Option<u32>,
+    /// Truncate configuration B's assignments at the novelty rank (needs
+    /// --compare-calibration with novelty cut-offs)
+    #[arg(long)]
+    compare_truncate_novel: bool,
+    /// Apply configuration B's calibrated per-rank thresholds (default: only
+    /// novelty cut-offs and the uniform thresholds are used)
+    #[arg(long)]
+    compare_calibrated_thresholds: bool,
     #[arg(long, default_value_t = 60.0)]
     threshold: f64,
     #[arg(long, default_value_t = 100)]
@@ -165,6 +173,8 @@ pub struct Config {
     pub params: idtaxa_core::ClassifyParams,
     pub calibration: Option<Calibration>,
     pub adaptive: Option<u32>,
+    pub truncate_novel: bool,
+    pub calibrated_thresholds: bool,
 }
 
 /// Classify held-out sequences under a configuration.
@@ -182,8 +192,8 @@ pub fn classify_all(
         .max()
         .unwrap_or(1);
     let thresholds = match &cfg.calibration {
-        Some(c) => c.thresholds(max_depth, cfg.params.threshold),
-        None => vec![cfg.params.threshold; max_depth],
+        Some(c) if cfg.calibrated_thresholds => c.thresholds(max_depth, cfg.params.threshold),
+        _ => vec![cfg.params.threshold; max_depth],
     };
     let engine = crate::classify_cmd::Engine {
         classifier,
@@ -207,19 +217,33 @@ pub fn classify_all(
 }
 
 pub fn records(
-    model: &Model,
+    cfg: &Config,
     cls: &[(Classification, Option<SimilarityProfile>)],
     truth: &[Vec<String>],
 ) -> Vec<EvalRecord> {
+    let model = &cfg.model;
     cls.iter()
         .zip(truth)
-        .map(|((c, _), t)| EvalRecord {
-            truth: t.clone(),
-            pred: c.lineage[1..]
-                .iter()
-                .map(|&n| model.taxon(n).to_string())
-                .collect(),
-            conf: c.confidences[1..].to_vec(),
+        .map(|((c, sim), t)| {
+            let mut conf = c.confidences[1..].to_vec();
+            if cfg.truncate_novel {
+                if let (Some(cal), Some(sim)) = (&cfg.calibration, sim) {
+                    if let Some(d) = cal.novelty_depth(sim) {
+                        // ranks below the novelty depth are not assigned
+                        for x in conf.iter_mut().skip(d) {
+                            *x = -1.0;
+                        }
+                    }
+                }
+            }
+            EvalRecord {
+                truth: t.clone(),
+                pred: c.lineage[1..]
+                    .iter()
+                    .map(|&n| model.taxon(n).to_string())
+                    .collect(),
+                conf,
+            }
         })
         .collect()
 }
@@ -261,6 +285,8 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
             model,
             calibration: cal,
             adaptive,
+            truncate_novel: false,
+            calibrated_thresholds: false,
         })
     };
     let mut configs = vec![];
@@ -281,12 +307,17 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
         let mode_b = modes.get(1).cloned().unwrap_or_else(|| modes[0].clone());
         let model_b = Model::load(a.compare_model.as_ref().unwrap_or(&a.model))?;
         let mut cfg = mk(&mode_b, model_b, cal_b, a.compare_adaptive)?;
+        cfg.truncate_novel = a.compare_truncate_novel;
+        cfg.calibrated_thresholds = a.compare_calibrated_thresholds;
         let mut label = mode_b;
         if let Some(p) = &a.compare_model {
             label = format!("{label}:{}", p.file_name().unwrap().to_string_lossy());
         }
-        if cfg.calibration.is_some() {
+        if cfg.calibrated_thresholds {
             label.push_str("+calibrated");
+        }
+        if cfg.truncate_novel {
+            label.push_str("+novelty");
         }
         if let Some(n) = cfg.adaptive {
             label.push_str(&format!("+adaptive{n}"));
@@ -304,7 +335,7 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
     let mut per_config_outcomes: Vec<Vec<Vec<idtaxa_core::eval::Outcome>>> = vec![];
     for cfg in &configs {
         let t0 = std::time::Instant::now();
-        let cls = classify_all(cfg, &seqs, false)?;
+        let cls = classify_all(cfg, &seqs, cfg.truncate_novel)?;
         if !quiet {
             eprintln!(
                 "[validate] {}: classified {} held-out sequences in {:.1}s",
@@ -313,7 +344,7 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
                 t0.elapsed().as_secs_f64()
             );
         }
-        let recs_e = records(&cfg.model, &cls, &truth);
+        let recs_e = records(cfg, &cls, &truth);
         let present = present_paths(&cfg.model);
         let max_depth = truth.iter().map(|t| t.len()).max().unwrap_or(0);
         let rnames = rank_names(&cfg.model, max_depth);
@@ -324,7 +355,9 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
         ths.sort_by(|x, y| x.partial_cmp(y).unwrap());
         for &t in &ths {
             let tv = match &cfg.calibration {
-                Some(c) if t == a.threshold => c.thresholds(max_depth, t),
+                Some(c) if t == a.threshold && cfg.calibrated_thresholds => {
+                    c.thresholds(max_depth, t)
+                }
                 _ => vec![t; max_depth],
             };
             for d in 1..=max_depth {
@@ -334,7 +367,7 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
                     "{}\t{d}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{:.4}",
                     cfg.label,
                     rnames[d - 1],
-                    if cfg.calibration.is_some() && t == a.threshold { "calibrated".to_string() } else { t.to_string() },
+                    if cfg.calibrated_thresholds && t == a.threshold { "calibrated".to_string() } else { t.to_string() },
                     m.n,
                     m.n_present(),
                     m.n_absent(),
@@ -354,14 +387,14 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
         }
         // summary at the main threshold
         let tv = match &cfg.calibration {
-            Some(c) => c.thresholds(max_depth, a.threshold),
-            None => vec![a.threshold; max_depth],
+            Some(c) if cfg.calibrated_thresholds => c.thresholds(max_depth, a.threshold),
+            _ => vec![a.threshold; max_depth],
         };
         summary.push_str(&format!(
             "Configuration {} (threshold {}{}), {} held-out sequences\n",
             cfg.label,
             a.threshold,
-            if cfg.calibration.is_some() {
+            if cfg.calibrated_thresholds {
                 ", calibrated per-rank thresholds"
             } else {
                 ""
@@ -494,6 +527,9 @@ pub struct CalibrateArgs {
     novelty_taxonomy: Option<PathBuf>,
     #[arg(long, default_value_t = 0.05)]
     target_error: f64,
+    /// Minimum known and novel examples per rank for a novelty cut-off
+    #[arg(long, default_value_t = 20)]
+    min_novelty_examples: usize,
     #[arg(long)]
     output: PathBuf,
     /// Reliability diagram TSV (before/after calibration)
@@ -529,9 +565,11 @@ pub fn calibrate(a: CalibrateArgs, quiet: bool) -> Result<()> {
         params,
         calibration: None,
         adaptive: None,
+        truncate_novel: false,
+        calibrated_thresholds: false,
     };
     let cls = classify_all(&cfg, &seqs, false)?;
-    let ev = records(&cfg.model, &cls, &truth);
+    let ev = records(&cfg, &cls, &truth);
     let max_depth = truth.iter().map(|t| t.len()).max().unwrap_or(0);
     let rnames = rank_names(&cfg.model, max_depth);
     let grid_err = [0.01, 0.02, 0.05, 0.1, 0.2];
@@ -617,7 +655,8 @@ pub fn calibrate(a: CalibrateArgs, quiet: bool) -> Result<()> {
                     novel.push(sim.per_lineage[d]);
                 }
             }
-            if known.is_empty() || novel.is_empty() {
+            // too few examples on either side gives an unreliable cut-off
+            if known.len() < a.min_novelty_examples || novel.len() < a.min_novelty_examples {
                 continue;
             }
             let (cut, sens, spec) = novelty_cutoff(&known, &novel);

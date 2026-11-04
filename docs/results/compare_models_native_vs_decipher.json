@@ -1,0 +1,28 @@
+{
+  "same_k": true,
+  "same_taxonomy": true,
+  "nodes_with_decision_kmers": [
+    4234,
+    4234
+  ],
+  "identical_decision_kmer_sets": 4230,
+  "mean_decision_kmer_jaccard": 0.9999674606119224,
+  "max_decision_weight_diff": 3.0357660829594124e-18,
+  "fraction_mean_abs_diff": 1.2145797136193294e-21,
+  "fraction_na": [
+    2,
+    2
+  ],
+  "fraction_na_both": 2,
+  "max_idf_diff": 0.0,
+  "problem_sequences": [
+    269,
+    260
+  ],
+  "problem_sequences_shared": 190,
+  "problem_groups": [
+    2,
+    2
+  ],
+  "problem_groups_shared": 2
+}

@@ -6,9 +6,11 @@
 #   ids <- read_idtaxa_rs("out.tsv", "rank_names.txt")
 #
 # Native TSV omits Root and the "unclassified_*" filler; both are restored
-# here with DECIPHER's conventions. The output of
-# `idtaxa classify --format decipher` (collapsed strings) can be read with
-# read.delim(..., header = FALSE) directly, like IdTaxa(type = "collapsed").
+# here with DECIPHER's conventions (Root's confidence is taken as the first
+# rank's, which it equals unless several first-rank taxa compete). The
+# output of `idtaxa classify --format decipher` (collapsed strings) can be
+# read with read.delim(..., header = FALSE) directly, like
+# IdTaxa(type = "collapsed").
 read_idtaxa_rs <- function(path, ranks = NULL) {
   d <- read.delim(path, comment.char = "#", quote = "", colClasses = "character")
   full <- "full_taxonomy" %in% names(d)

@@ -1,0 +1,4 @@
+id	seq_hash	strand	taxonomy	confidences	bootstraps_used
+asv1	0000000000000001	+	Eukaryota;TSAR;Alveolata	99.0;95.0;80.0	100
+asv2	0000000000000002	+	Eukaryota;TSAR	99.0;70.0	100
+asv3	0000000000000003	+	Eukaryota;Obazoa	99.0;65.0	100
