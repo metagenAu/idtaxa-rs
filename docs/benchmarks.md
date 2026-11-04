@@ -195,7 +195,7 @@ Same 8,000 references, `idtaxa train` (defaults) vs DECIPHER `LearnTaxa`
 | learned fractions | mean difference 1.2e-21; NA fractions identical (2 = 2) |
 | IDF weights | max difference 0 |
 | problem groups | 2 vs 2, both shared |
-| problem sequences | 260 (native) vs 269 (DECIPHER); 190 shared (71% of DECIPHER's found; Jaccard 0.56). DECIPHER seed 1 vs seed 2: PS_BASELINE |
+| problem sequences | 260 (native) vs 269 (DECIPHER); 190 shared (71% of DECIPHER's found; Jaccard 0.56). DECIPHER `LearnTaxa` seed 1 vs seed 2: 269 vs 245, 196 shared (73%; Jaccard 0.62) |
 | classification of the 10k parity queries | **byte-identical** to the DECIPHER-trained model (same seed) |
 
 Problem-sequence differences come from the random bootstrap in the
@@ -407,6 +407,10 @@ amplicons. Not recommended.
 
 Contrary to the hypothesis, spaced seeds did not help divergent queries
 from unseen genera on this marker. Neutral; not recommended.
+
+Not implemented: combining *multiple* seed patterns in one model (the
+brief's optional item). Given that a single pattern was neutral, this was
+not pursued.
 
 ### Phase 6 conclusion: recommended configuration
 
