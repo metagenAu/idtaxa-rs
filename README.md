@@ -159,8 +159,8 @@ Based on the measurements in
 | step | recommendation | evidence |
 |---|---|---|
 | `extract-region` | optional; train on the amplicon region and check the coverage report | neutral on PR2 V4 at matched error; `--rescue` raises species coverage from 58% to 73% |
-| `clean-ref --drop-placeholder-labels` | **yes** | species error 15.4% → 8.7% at threshold 60; species accuracy at 5% error 28.7% → 41.3% |
-| problem-sequence removal | no (review the file instead) | raises upper-rank error by 1 point |
+| `clean-ref --drop-placeholder-labels` | **yes** | species error 11.4% → 7.8% at threshold 60; species accuracy at 5% error 34.0% → 41.6% |
+| problem-sequence removal | no (review the file instead) | raises upper-rank error, no species gain over cleaning |
 | `train` | standard mode | spaced seeds neutral; balanced training is a trade-off |
 | `calibrate` | **yes**, on a held-out set that mixes random and clade-exclusion sequences | raw confidence is strongly under-confident; thresholds learned on known taxa only give 15–19% order/family error on unseen genera |
 | `classify --calibration --novelty-flag` | **yes**; `--truncate-novel` when overclassification matters most | truncation halves genus/species overclassification of unseen genera (28.8% → 13.8%) at a cost of 10 points of genus accuracy on known taxa |

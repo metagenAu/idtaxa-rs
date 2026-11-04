@@ -249,8 +249,8 @@ Values with `*` have 95% paired bootstrap CIs excluding 0.
 | extension | random leave-out | clade exclusion (unseen genera) | verdict |
 |---|---|---|---|
 | 6.1 region extraction | neutral: −1.0 to −1.4 pt accuracy*, −0.3 to −0.8 pt error* at threshold 60; equal at matched error | – | optional (coverage cost, see below) |
-| 6.2 label cleaning (placeholders) | **species error 15.4% → 8.7%*** at no accuracy cost; species accuracy at 5% error 28.7% → **41.3%** | – | **recommended** |
-| 6.2 + problem-sequence removal (2 rounds) | upper-rank error +1.0 pt*, genus −1.8 pt* | – | not recommended |
+| 6.2 label cleaning (placeholders) | **species error 11.4% → 7.8%***; species accuracy at 5% error 34.0% → **41.6%**; genus −1.8 pt* | – | **recommended** |
+| 6.2 + problem-sequence removal (2 rounds) | upper-rank error +0.6 pt*, genus −2.0 pt*; species like cleaning alone | – | not recommended |
 | 6.3 calibration | reliable probabilities; per-rank thresholds hit the target where feasible | depends on the calibration mix, see below | **recommended** (with a novelty-aware calibration set) |
 | 6.4 novelty truncation | genus error 7.2% → 4.4%*, accuracy 45.5% → 35.6%* | genus/species overclassification **28.8% → 13.8%***, 26.5% → 12.8%* | recommended **as a flag**; truncation is a trade-off |
 | 6.5 placement consensus | not benchmarked (see below) | – | – |
@@ -286,19 +286,31 @@ long sequences) and preventing primer-region k-mers from dominating.
 
 ### 6.2 Reference label cleaning
 
-`clean-ref --drop-placeholder-labels` truncated 1,943 of 10,843 training
+`clean-ref --drop-placeholder-labels` truncated 1,845 of 10,843 training
 lineages: mostly `Genus_sp.` species and strain-numbered labels. No
 homonyms or rank shifts were found in this PR2 subset. Evaluation truth is
-the cleaned label for both models.
+the cleaned label for both models; held-out sequences whose cleaned label
+stops above a rank are left out at that rank.
 
-| | species error @ 60 | species accuracy at 2% / 5% error | genus accuracy @ 60 |
+| | species error @ 60 | species accuracy at 2% / 5% error | genus correct @ 60 |
 |---|---|---|---|
-| standard model | 15.4% | 11.4% / 28.7% | 45.4% correct |
-| cleaned labels | **8.7%** * | **20.8% / 41.3%** | 43.6% * |
-| cleaned + problem sequences removed (2 rounds) | 9.0% * | 21.8% / 44.0% | 43.6% *, with upper-rank error +1.0 pt * |
+| standard model | 11.4% | 21.1% / 34.0% | 45.5% |
+| cleaned labels | **7.8%** * | **28.9% / 41.6%** | 43.7% * |
+| cleaned + problem sequences removed (2 rounds) | 7.9% * | 30.9% / 44.0% | 43.5% *, with upper-rank error +0.6 pt * |
+
+*Correction (after an external review):* the first version of this table
+reported species error 15.4% → 8.7% and 2%/5% accuracy 11.4/28.7% →
+20.8/41.3%. `validate` then counted a held-out sequence whose truth label
+stopped above a rank as an overclassification at that rank; it now
+excludes it ("truth unknown"). `clean-ref` matching was also changed to
+whole words (it previously flagged real names containing "clone", such as
+*Cycloneritida*), which changes the number of truncated lineages from
+1,943 to 1,845. Calibration and novelty results below are unaffected
+because every truth label in that pool has all 9 ranks.
 
 Placeholder species labels attract confident assignments to
-uninformative names. Removing them halves species-level error. Iterative
+uninformative names. Removing them cuts species-level error by about a
+third. Iterative
 problem-sequence removal adds little at species and raises error at
 upper ranks, because it removes valid but divergent references. Its review
 file (`*_problem_sequences.tsv`, labelled vs predicted lineage) is useful

@@ -5,9 +5,11 @@
 //! * `TP` – assigned at `d` and the assigned taxon equals the truth;
 //! * `MC` – misclassified: assigned, wrong, truth taxon present in reference;
 //! * `OC` – overclassified: assigned although the truth taxon at `d` is
-//!   absent from the reference (or the truth lineage has no rank `d`);
+//!   absent from the reference;
 //! * `UC` – underclassified: not assigned although the truth is present;
-//! * `TN` – not assigned and the truth taxon is absent.
+//! * `TN` – not assigned and the truth taxon is absent;
+//! * `NA` – the truth lineage stops above `d`; excluded from the counts at
+//!   `d` (an unknown truth is neither right nor wrong).
 //!
 //! Following Murali et al. (2018), taxa absent from the reference make any
 //! assignment at that rank an overclassification.
@@ -29,6 +31,10 @@ pub enum Outcome {
     OC,
     UC,
     TN,
+    /// The truth lineage has no name at this rank (e.g. a label truncated
+    /// at a placeholder): correctness is unknown, so the sequence is left
+    /// out of the counts at this rank.
+    NA,
 }
 
 /// One held-out sequence's truth and prediction.
@@ -84,8 +90,11 @@ pub fn outcome(r: &EvalRecord, d: usize, thresholds: &[f64], present: &HashSet<S
             break;
         }
     }
+    if r.truth.len() < d {
+        return Outcome::NA;
+    }
     let assigned = assigned_depth >= d;
-    let truth_present = r.truth.len() >= d && present.contains(&path(&r.truth, d));
+    let truth_present = present.contains(&path(&r.truth, d));
     match (assigned, truth_present) {
         (true, true) => {
             if path(&r.pred, d) == path(&r.truth, d) {
@@ -164,7 +173,6 @@ pub fn metrics(
     let mut m = RankMetrics {
         depth,
         threshold: thresholds.get(depth - 1).copied().unwrap_or(f64::NAN),
-        n: records.len(),
         ..Default::default()
     };
     for r in records {
@@ -174,7 +182,9 @@ pub fn metrics(
             Outcome::OC => m.oc += 1,
             Outcome::UC => m.uc += 1,
             Outcome::TN => m.tn += 1,
+            Outcome::NA => continue,
         }
+        m.n += 1;
     }
     m
 }
@@ -262,6 +272,17 @@ mod tests {
         let m = metrics(&[r, novel], 2, &[60.0, 60.0], &present);
         assert_eq!((m.mc, m.oc), (1, 1));
         assert_eq!(m.error_rate(), 1.0);
+        // a truth label truncated above the rank is unknown, not an
+        // overclassification
+        let shallow = EvalRecord {
+            truth: vec!["A".into()],
+            pred: vec!["A".into(), "B".into()],
+            conf: vec![99.0, 99.0],
+        };
+        assert_eq!(outcome(&shallow, 2, &[60.0, 60.0], &present), Outcome::NA);
+        assert_eq!(outcome(&shallow, 1, &[60.0, 60.0], &present), Outcome::TP);
+        let m2 = metrics(&[shallow], 2, &[60.0, 60.0], &present);
+        assert_eq!((m2.n, m2.oc), (0, 0));
         let (d, lo, hi) = paired_bootstrap(&[0.0, 0.0, 1.0, 1.0], &[1.0, 1.0, 1.0, 1.0], 200, 1);
         assert_eq!(d, 0.5);
         assert!(lo <= d && d <= hi);

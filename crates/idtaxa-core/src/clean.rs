@@ -36,10 +36,8 @@ pub const DEFAULT_PLACEHOLDERS: &[&str] = &[
     "unassigned",
     "unknown",
     "environmental sample",
-    "environmental_sample",
     "metagenome",
     "incertae sedis",
-    "incertae_sedis",
     "clone",
 ];
 
@@ -51,6 +49,10 @@ pub struct CleanOptions {
     /// Treat `Genus sp.`/`Genus_sp` species and `sp.` + strain/number
     /// labels as placeholders.
     pub sp_placeholders: bool,
+    /// Also treat PR2-style filler ranks (`Name_X`, `Name_XX`) as
+    /// placeholders. Off by default: in PR2 informative ranks usually
+    /// follow them, and truncating there drops those ranks.
+    pub x_fillers: bool,
     /// Truncate lineages to at most this many ranks.
     pub rank_count: Option<usize>,
     pub case: CaseMode,
@@ -62,6 +64,7 @@ impl Default for CleanOptions {
             truncate_placeholders: true,
             placeholder_patterns: DEFAULT_PLACEHOLDERS.iter().map(|s| s.to_string()).collect(),
             sp_placeholders: true,
+            x_fillers: false,
             rank_count: None,
             case: CaseMode::Keep,
         }
@@ -98,24 +101,47 @@ pub struct Cleaned {
 }
 
 /// Whether a name is a placeholder under the options.
+/// Split a label into lower-case word tokens; `_`, `.`, `-` and whitespace
+/// separate words, so "Incertae_Sedis", ".incertae.sedis" and
+/// "incertae sedis" all give `["incertae", "sedis"]`.
+pub fn label_tokens(name: &str) -> Vec<String> {
+    name.to_lowercase()
+        .split(|c: char| c == '_' || c == '.' || c == '-' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a label is a PR2-style filler rank (`Name_X`, `Name_XX`, ...).
+pub fn is_x_filler(name: &str) -> bool {
+    match name.rsplit_once('_') {
+        Some((head, tail)) => {
+            !head.is_empty() && !tail.is_empty() && tail.chars().all(|c| c == 'X' || c == 'x')
+        }
+        None => false,
+    }
+}
+
+/// Whether a name is a placeholder under the options. Patterns match whole
+/// words only (a pattern's words must appear consecutively in the label),
+/// so `clone` flags "uncultured clone 12" but not "Cycloneritida".
 pub fn is_placeholder(name: &str, depth_is_last: bool, o: &CleanOptions) -> bool {
-    let l = name.to_lowercase();
-    if l.is_empty() || l == "na" || l == "nan" {
+    let toks = label_tokens(name);
+    if toks.is_empty() || (toks.len() == 1 && (toks[0] == "na" || toks[0] == "nan")) {
         return true;
     }
-    if o.placeholder_patterns
-        .iter()
-        .any(|p| l.contains(p.as_str()))
-    {
+    if o.x_fillers && is_x_filler(name) {
         return true;
+    }
+    for p in &o.placeholder_patterns {
+        let pt = label_tokens(p);
+        if !pt.is_empty() && toks.windows(pt.len()).any(|w| w == pt.as_slice()) {
+            return true;
+        }
     }
     if o.sp_placeholders && depth_is_last {
         // "Genus sp." / "Genus_sp" / "Genus sp. ABC123" / "Genus_sp._123"
-        let norm = l.replace('_', " ");
-        let toks: Vec<&str> = norm.split_whitespace().collect();
-        if toks.len() >= 2
-            && (toks[1] == "sp." || toks[1] == "sp" || toks[1] == "spp." || toks[1] == "spp")
-        {
+        if toks.len() >= 2 && (toks[1] == "sp" || toks[1] == "spp") {
             return true;
         }
     }
@@ -263,6 +289,27 @@ mod tests {
         );
         assert_eq!(c.lineages[3], None);
         assert_eq!(c.changes.len(), 3);
+    }
+
+    #[test]
+    fn whole_word_matching() {
+        let o = CleanOptions::default();
+        assert!(!is_placeholder("Cycloneritida", false, &o));
+        assert!(is_placeholder("uncultured_clone_12", false, &o));
+        assert!(is_placeholder("Dinophyceae.incertae.sedis", false, &o));
+        assert!(is_placeholder("Incertae_Sedis", false, &o));
+        assert!(is_placeholder("Environmental_Sample", false, &o));
+        assert!(!is_placeholder("Unknownia", false, &o));
+        assert!(is_placeholder("Bacillus_sp.", true, &o));
+        assert!(!is_placeholder("Bacillus_spizizenii", true, &o));
+        assert!(!is_placeholder("Dinophyceae_X", false, &o));
+        let ox = CleanOptions {
+            x_fillers: true,
+            ..Default::default()
+        };
+        assert!(is_placeholder("Dinophyceae_X", false, &ox));
+        assert!(is_placeholder("Annelida_XX", false, &ox));
+        assert!(!is_placeholder("Taxon_Xa", false, &ox));
     }
 
     #[test]

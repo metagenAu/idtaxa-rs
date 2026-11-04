@@ -392,10 +392,21 @@ agreement is measured in `docs/benchmarks.md`.
   extracted regions (from a deterministic sample of ≤ 2,000) with highest
   8-mer Jaccard similarity are tried; their first/last 20 bases are located
   with ≤ 3 mismatches.
-* **Label cleaning**: case-insensitive placeholder substrings (`uncultured`,
-  `unidentified`, `unclassified`, `unassigned`, `unknown`, `environmental
-  sample`, `metagenome`, `incertae sedis`, `clone`), and species labels of
-  the form `Genus sp.`/`Genus_sp`/`Genus sp. XYZ` (strain-numbered); the
-  lineage is truncated before the first placeholder. PR2's `_X` filler ranks
-  are *not* placeholders by default (informative ranks follow them); add
-  them with `--extra-placeholder _x` if wanted.
+* **Label cleaning**: placeholder patterns match **whole words**
+  (case-insensitive; `_`, `.`, `-` and whitespace separate words), so
+  `.incertae.sedis` and `Incertae_Sedis` match `incertae sedis`, while real
+  names that merely contain a pattern (*Cycloneritida* / `clone`) do not.
+  Default patterns: `uncultured`, `unidentified`, `unclassified`,
+  `unassigned`, `unknown`, `environmental sample`, `metagenome`,
+  `incertae sedis`, `clone`, plus species labels of the form
+  `Genus sp.`/`Genus_sp`/`Genus sp. XYZ`. The lineage is truncated before
+  the first placeholder. PR2's `_X`/`_XX` filler ranks are not placeholders
+  by default, because informative ranks usually follow them;
+  `clean-ref --x-fillers` treats them as placeholders (truncating there).
+* **Evaluation of truncated truth labels**: when a held-out sequence's
+  truth lineage stops above rank `d` (e.g. after label cleaning),
+  `validate` and `calibrate` treat its rank-`d` outcome as unknown and leave
+  it out, rather than counting an assignment as overclassification.
+* **Clade exclusion depth**: `split --mode clade --rank-from-bottom N`
+  excludes whole taxa N ranks above the deepest rank of the taxonomy
+  (`workflow.sh` uses 1: genus when the last rank is species).

@@ -43,6 +43,10 @@ pub struct SplitArgs {
     /// Rank depth (1 = first rank below Root) whose taxa are excluded in clade mode
     #[arg(long, default_value_t = 0)]
     rank: usize,
+    /// Alternative to --rank: count from the deepest rank of the taxonomy
+    /// (1 = one above it, i.e. genus when the last rank is species)
+    #[arg(long, default_value_t = 0)]
+    rank_from_bottom: usize,
     #[arg(long, default_value_t = 1)]
     seed: u64,
     /// Writes <prefix>_train.fasta, <prefix>_train.tsv, <prefix>_holdout.fasta, <prefix>_holdout.tsv
@@ -65,11 +69,19 @@ pub fn split(a: SplitArgs, quiet: bool) -> Result<()> {
             }
         }
         "clade" => {
-            if a.rank == 0 {
-                bail!("--mode clade requires --rank (depth below Root, e.g. 7 for genus in a 7-rank taxonomy)");
+            let max_depth = names.iter().map(|n| n.len()).max().unwrap_or(0);
+            let rank = if a.rank > 0 {
+                a.rank
+            } else if a.rank_from_bottom > 0 && a.rank_from_bottom < max_depth {
+                max_depth - a.rank_from_bottom
+            } else {
+                bail!("--mode clade requires --rank (depth below Root, e.g. 6 for genus in a 7-rank taxonomy) or --rank-from-bottom");
+            };
+            if !quiet {
+                eprintln!("split: excluding whole taxa at depth {rank} of {max_depth}");
             }
             let key = |v: &Vec<String>| -> Option<String> {
-                (v.len() >= a.rank).then(|| v[..a.rank].join(";"))
+                (v.len() >= rank).then(|| v[..rank].join(";"))
             };
             let taxa: BTreeSet<String> = names.iter().filter_map(key).collect();
             // only exclude taxa whose parent keeps other members, so the
@@ -471,13 +483,17 @@ pub fn validate(a: ValidateArgs, quiet: bool) -> Result<()> {
                 "misclassified",
                 "underclassified",
             ] {
-                let xa: Vec<f64> = per_config_outcomes[0][d]
-                    .iter()
-                    .map(|&o| indicator(o, metric))
+                // sequences with an unknown truth at this rank are left out
+                let keep: Vec<usize> = (0..per_config_outcomes[0][d].len())
+                    .filter(|&i| per_config_outcomes[0][d][i] != idtaxa_core::eval::Outcome::NA)
                     .collect();
-                let xb: Vec<f64> = per_config_outcomes[1][d]
+                let xa: Vec<f64> = keep
                     .iter()
-                    .map(|&o| indicator(o, metric))
+                    .map(|&i| indicator(per_config_outcomes[0][d][i], metric))
+                    .collect();
+                let xb: Vec<f64> = keep
+                    .iter()
+                    .map(|&i| indicator(per_config_outcomes[1][d][i], metric))
                     .collect();
                 let ma = xa.iter().sum::<f64>() / xa.len().max(1) as f64;
                 let mb = xb.iter().sum::<f64>() / xb.len().max(1) as f64;
@@ -579,9 +595,11 @@ pub fn calibrate(a: CalibrateArgs, quiet: bool) -> Result<()> {
         // (raw confidence, correct) for every query predicted to depth d
         let pts: Vec<(f64, bool)> = ev
             .iter()
-            .filter(|r| r.conf.len() >= d)
+            // only queries whose truth names this rank: a truth lineage
+            // that stops above it says nothing about correctness
+            .filter(|r| r.conf.len() >= d && r.truth.len() >= d)
             .map(|r| {
-                let ok = r.truth.len() >= d && r.truth[..d] == r.pred[..d];
+                let ok = r.truth[..d] == r.pred[..d];
                 (r.conf[d - 1], ok)
             })
             .collect();
@@ -648,7 +666,10 @@ pub fn calibrate(a: CalibrateArgs, quiet: bool) -> Result<()> {
                     continue;
                 }
                 let t = &all_truth[i];
-                let present_d = t.len() >= d && present.contains(&format!("{};", t[..d].join(";")));
+                if t.len() < d {
+                    continue; // truth unknown at this rank
+                }
+                let present_d = present.contains(&format!("{};", t[..d].join(";")));
                 if present_d {
                     known.push(sim.per_lineage[d]);
                 } else {
@@ -864,7 +885,12 @@ pub struct CleanArgs {
     /// Retrain and drop problem sequences iteratively for up to N rounds
     #[arg(long, default_value_t = 0)]
     retrain_rounds: u32,
-    /// Extra placeholder regex-free patterns (case-insensitive substrings)
+    /// Also treat PR2-style filler ranks (Name_X, Name_XX) as placeholders
+    /// (truncates the lineage there, dropping any ranks below)
+    #[arg(long)]
+    x_fillers: bool,
+    /// Extra placeholder patterns: case-insensitive whole words; `_`, `.`
+    /// and `-` count as word separators
     #[arg(long, value_delimiter = ',')]
     extra_placeholder: Vec<String>,
     /// Pad/truncate all lineages to this many ranks (0 = keep)
@@ -883,6 +909,7 @@ pub fn clean_ref(a: CleanArgs, quiet: bool) -> Result<()> {
     let (recs, lin) = read_reference(&a.reference, a.taxonomy.as_deref())?;
     let mut opts = CleanOptions {
         truncate_placeholders: a.drop_placeholder_labels,
+        x_fillers: a.x_fillers,
         rank_count: (a.rank_count > 0).then_some(a.rank_count),
         case: a.case.parse()?,
         ..Default::default()

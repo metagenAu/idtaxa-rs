@@ -27,11 +27,13 @@ regtax=(); [ "$TAX" != "-" ] && regtax=(--taxonomy "$TAX")
 idtaxa clean-ref --ref "$OUT/region.fasta" "${regtax[@]}" --drop-placeholder-labels \
   --output-prefix "$OUT/cleaned"
 
-# 3. held-out splits for calibration (random) and novelty (clade exclusion at genus)
+# 3. held-out splits for calibration (random) and novelty (clade exclusion one
+#    rank above the deepest, i.e. genus when the last rank is species;
+#    CLADE_FROM_BOTTOM=2 excludes whole families instead)
 idtaxa split --ref "$OUT/cleaned.fasta" --taxonomy "$OUT/cleaned_taxonomy.tsv" \
   --mode random --fraction 0.1 --output-prefix "$OUT/rand"
 idtaxa split --ref "$OUT/rand_train.fasta" --taxonomy "$OUT/rand_train.tsv" \
-  --mode clade --rank "${CLADE_RANK:-8}" --fraction 0.05 --output-prefix "$OUT/clade"
+  --mode clade --rank-from-bottom "${CLADE_FROM_BOTTOM:-1}" --fraction 0.05 --output-prefix "$OUT/clade"
 
 # 4. calibration model (trained without either held-out set) ...
 idtaxa train --ref "$OUT/clade_train.fasta" --taxonomy "$OUT/clade_train.tsv" --output "$OUT/calib_model.idtx" --threads "$THREADS"
