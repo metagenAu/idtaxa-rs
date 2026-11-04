@@ -218,9 +218,8 @@ impl Classification {
 
 /// Per-thread scratch buffers (no allocation in the hot loop once warm).
 pub struct Scratch {
-    stamp: Vec<u32>,
+    acc: Vec<SeqAcc>,
     epoch: u32,
-    score: Vec<f64>,
     touched: Vec<u32>,
     group_stamp: Vec<u32>,
     group_slot: Vec<u32>,
@@ -232,11 +231,25 @@ pub struct Scratch {
     hits_desc: Vec<f64>,
     groups: Vec<GroupTop>,
     hmat: Vec<f64>,
-    top_gi: Vec<u32>,
-    occ_off: Vec<u32>,
-    occ_fill: Vec<u32>,
-    occ: Vec<u32>,
+    pair_off: Vec<u32>,
+    neg_kmers: Vec<u32>,
+    pair_ti: Vec<u32>,
+    top_of_touched: Vec<u32>,
+    shared: Vec<u64>,
+    occ_mask: Vec<u64>,
+    posw: Vec<u64>,
+    best: Vec<f64>,
+    winners: Vec<Vec<u32>>,
     ranges: Vec<Range<u32>>,
+}
+
+/// Per-training-sequence accumulator (one cache line access per posting).
+#[derive(Clone, Copy, Debug, Default)]
+struct SeqAcc {
+    stamp: u32,
+    top: u32,
+    ti: u32,
+    score: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -250,9 +263,8 @@ struct GroupTop {
 impl Scratch {
     pub fn new(model: &Model) -> Self {
         Self {
-            stamp: vec![0; model.n_seqs()],
+            acc: vec![SeqAcc::default(); model.n_seqs()],
             epoch: 0,
-            score: vec![0.0; model.n_seqs()],
             touched: Vec::new(),
             group_stamp: vec![0; model.n_nodes()],
             group_slot: vec![0; model.n_nodes()],
@@ -264,10 +276,15 @@ impl Scratch {
             hits_desc: Vec::new(),
             groups: Vec::new(),
             hmat: Vec::new(),
-            top_gi: vec![u32::MAX; model.n_seqs()],
-            occ_off: Vec::new(),
-            occ_fill: Vec::new(),
-            occ: Vec::new(),
+            pair_off: Vec::new(),
+            neg_kmers: Vec::new(),
+            pair_ti: Vec::new(),
+            top_of_touched: Vec::new(),
+            shared: Vec::new(),
+            occ_mask: Vec::new(),
+            posw: Vec::new(),
+            best: Vec::new(),
+            winners: Vec::new(),
             ranges: Vec::new(),
         }
     }
@@ -275,7 +292,7 @@ impl Scratch {
     fn next_epoch(&mut self) -> u32 {
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
-            self.stamp.iter_mut().for_each(|x| *x = 0);
+            self.acc.iter_mut().for_each(|x| x.stamp = 0);
             self.group_stamp.iter_mut().for_each(|x| *x = 0);
             self.epoch = 1;
         }
@@ -311,6 +328,8 @@ pub struct Classifier<'m> {
     lens: Vec<u32>,
     /// group sizes (number of training sequences per leaf group)
     group_size: Vec<u32>,
+    /// use the unpruned reference path (testing)
+    pub force_full: bool,
 }
 
 /// DECIPHER's minimum sample size: smallest even `minS` in 2..=100 such that
@@ -357,6 +376,7 @@ impl<'m> Classifier<'m> {
             params,
             lens,
             group_size,
+            force_full: false,
         })
     }
 
@@ -488,6 +508,7 @@ impl<'m> Classifier<'m> {
         }
     }
 
+    #[inline(never)]
     /// Tree descent: returns the children (of the stopping node) whose
     /// subtrees are scored in the leaf phase.
     fn descend(
@@ -653,42 +674,101 @@ impl<'m> Classifier<'m> {
         }
         let davg = wsum / b as f64;
 
-        // sumHits over the kept ranges via the inverted index
+        // sumHits over the kept ranges via the inverted index. K-mers stored
+        // as complement lists (present in > half of the training set) add
+        // their weight to every kept sequence and subtract it again for the
+        // sequences lacking them.
         let epoch = sc.next_epoch();
         sc.touched.clear();
+        sc.pair_off.clear();
+        sc.pair_ti.clear();
+        sc.pair_off.push(0);
+        sc.neg_kmers.clear();
+        let mut base = 0.0;
+        for i in 0..nq {
+            if sc.counts[i] > 0
+                && sc.qslot[i] != u32::MAX
+                && m.slot_is_complement(sc.qslot[i] as usize)
+            {
+                sc.neg_kmers.push(i as u32);
+                base += sc.counts[i] as f64 * sc.qidf[i];
+            }
+        }
+        let in_len = |id: usize| -> bool {
+            if !filter_len {
+                return true;
+            }
+            let l = self.lens[id] as f64;
+            l >= lo_len && l <= hi_len
+        };
+        if !sc.neg_kmers.is_empty() {
+            for r in &sc.ranges {
+                for id in r.clone() {
+                    let iu = id as usize;
+                    if !in_len(iu) {
+                        continue;
+                    }
+                    let acc = &mut sc.acc[iu];
+                    acc.stamp = epoch;
+                    acc.score = base;
+                    acc.ti = sc.touched.len() as u32;
+                    sc.touched.push(id);
+                }
+            }
+        }
+        let whole = |r: &Range<u32>| r.start == 0 && r.end as usize == m.n_seqs();
         for i in 0..nq {
             let c = sc.counts[i];
             if c == 0 || sc.qslot[i] == u32::MAX {
+                sc.pair_off.push(sc.pair_ti.len() as u32);
                 continue;
             }
+            let slot = sc.qslot[i] as usize;
             let add = c as f64 * sc.qidf[i];
-            let post = m.postings(sc.qslot[i] as usize);
+            let post = m.postings(slot);
+            let neg = m.slot_is_complement(slot);
             for r in &sc.ranges {
-                let a = post.partition_point(|&x| x < r.start);
-                let z = a + post[a..].partition_point(|&x| x < r.end);
+                let (a, z) = if whole(r) {
+                    (0, post.len())
+                } else {
+                    let a = post.partition_point(|&x| x < r.start);
+                    (a, a + post[a..].partition_point(|&x| x < r.end))
+                };
                 for &id in &post[a..z] {
                     let id_u = id as usize;
-                    if sc.stamp[id_u] != epoch {
-                        if filter_len {
-                            let l = self.lens[id_u] as f64;
-                            if l < lo_len || l > hi_len {
-                                continue;
-                            }
+                    let acc = &mut sc.acc[id_u];
+                    if neg {
+                        if acc.stamp == epoch {
+                            acc.score -= add;
                         }
-                        sc.stamp[id_u] = epoch;
-                        sc.score[id_u] = 0.0;
+                        continue;
+                    }
+                    if acc.stamp != epoch {
+                        if !in_len(id_u) {
+                            continue;
+                        }
+                        acc.stamp = epoch;
+                        acc.score = 0.0;
+                        acc.ti = sc.touched.len() as u32;
                         sc.touched.push(id);
                     }
-                    sc.score[id_u] += add;
+                    acc.score += add;
+                    sc.pair_ti.push(acc.ti);
                 }
             }
+            sc.pair_off.push(sc.pair_ti.len() as u32);
         }
 
         // top sequence per group: max score, ties -> lowest original index
         sc.groups.clear();
         for &id in &sc.touched {
+            let sco = sc.acc[id as usize].score;
+            if sco == 0.0 {
+                // shares no sampled k-mer (complement lists touch every
+                // kept sequence); can never receive a replicate
+                continue;
+            }
             let g = m.seq_group(id);
-            let sco = sc.score[id as usize];
             let orig = m.seq_orig(id);
             if sc.group_stamp[g as usize] != epoch {
                 sc.group_stamp[g as usize] = epoch;
@@ -738,51 +818,97 @@ impl<'m> Classifier<'m> {
             });
         }
 
-        // per-replicate hits of each group's top sequence. Rather than
-        // intersecting every top sequence with the query, a second pass over
-        // the postings adds idf to hits[g][rep] for every replicate in which
-        // a k-mer shared with top sequence g was sampled.
+        let tot = if self.params.group_size_exponent == 0.0 && !self.force_full {
+            self.winners_pruned(kmers, s, b, ng, epoch, davg, rng, sc)
+        } else {
+            self.winners_full(kmers, s, b, ng, epoch, davg, rng, sc)
+        };
+        let maxt = tot.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let ties: Vec<usize> = (0..ng).filter(|&g| tot[g] == maxt).collect();
+        let sel = if ties.len() > 1 {
+            ties[rng.gen_range(0..ties.len())]
+        } else {
+            ties[0]
+        };
+        // sims = sum_b hits[b, top_selected] / davg = sumHits(top) / davg
+        let sim = sc.groups[sel].score / davg;
+        let tot_hits = (0..ng)
+            .filter(|&g| tot[g] > 0.0 || g == sel)
+            .map(|g| (sc.groups[g].group, tot[g]))
+            .collect();
+        Some(RunResult {
+            selected: sc.groups[sel].group,
+            tot_hits,
+            b,
+            sim,
+        })
+    }
+
+    /// Pick the per-replicate winner among tied groups (R's `max.col`
+    /// with `ties.method = "random"`) and credit it with `best / davg`.
+    fn credit(
+        best: f64,
+        winners: &mut [u32],
+        davg: f64,
+        tot: &mut [f64],
+        rng: &mut Xoshiro256PlusPlus,
+    ) {
+        if best <= 0.0 || winners.is_empty() {
+            return;
+        }
+        let pick = if winners.len() > 1 {
+            winners.sort_unstable();
+            winners[rng.gen_range(0..winners.len())]
+        } else {
+            winners[0]
+        };
+        tot[pick as usize] += best / davg;
+    }
+
+    /// Reference implementation: full hits matrix of every group's top
+    /// sequence (also used for group-size-normalised scoring).
+    #[allow(clippy::too_many_arguments)]
+    fn winners_full(
+        &self,
+        kmers: &[u32],
+        s: usize,
+        b: u32,
+        ng: usize,
+        epoch: u32,
+        davg: f64,
+        rng: &mut Xoshiro256PlusPlus,
+        sc: &mut Scratch,
+    ) -> Vec<f64> {
+        let m = self.model;
+        let nq = kmers.len();
         let bu = b as usize;
-        for (gi, g) in sc.groups.iter().enumerate() {
-            sc.top_gi[g.seq as usize] = gi as u32;
-        }
-        // replicate occurrences per query k-mer (CSR)
-        sc.occ_off.clear();
-        sc.occ_off.push(0);
-        for i in 0..nq {
-            let last = *sc.occ_off.last().unwrap();
-            sc.occ_off.push(last + sc.counts[i]);
-        }
-        sc.occ.clear();
-        sc.occ.resize(total, 0);
-        sc.occ_fill.clear();
-        sc.occ_fill.extend_from_slice(&sc.occ_off[..nq]);
-        for (t, &qi) in sc.samp.iter().enumerate() {
-            let pos = &mut sc.occ_fill[qi as usize];
-            sc.occ[*pos as usize] = (t / s) as u32;
-            *pos += 1;
-        }
+        let _ = epoch;
         sc.hmat.clear();
         sc.hmat.resize(ng * bu, 0.0);
-        for i in 0..nq {
-            if sc.counts[i] == 0 || sc.qslot[i] == u32::MAX {
-                continue;
-            }
-            let w = sc.qidf[i];
-            let occ = &sc.occ[sc.occ_off[i] as usize..sc.occ_off[i + 1] as usize];
-            let post = m.postings(sc.qslot[i] as usize);
-            for r in &sc.ranges {
-                let a = post.partition_point(|&x| x < r.start);
-                let z = a + post[a..].partition_point(|&x| x < r.end);
-                for &id in &post[a..z] {
-                    let gi = sc.top_gi[id as usize] as usize;
-                    if gi < ng && sc.groups[gi].seq == id && sc.stamp[id as usize] == epoch {
-                        let row = &mut sc.hmat[gi * bu..(gi + 1) * bu];
-                        for &rep in occ {
-                            row[rep as usize] += w;
-                        }
+        let mut member = vec![false; nq];
+        for gi in 0..ng {
+            member.iter_mut().for_each(|x| *x = false);
+            let tk = m.seq_kmers(sc.groups[gi].seq);
+            let (mut x, mut y) = (0usize, 0usize);
+            while x < tk.len() && y < nq {
+                match tk[x].cmp(&kmers[y]) {
+                    std::cmp::Ordering::Less => x += 1,
+                    std::cmp::Ordering::Greater => y += 1,
+                    std::cmp::Ordering::Equal => {
+                        member[y] = true;
+                        x += 1;
+                        y += 1;
                     }
                 }
+            }
+            for rep in 0..bu {
+                let mut h = 0.0;
+                for &qi in &sc.samp[rep * s..(rep + 1) * s] {
+                    if member[qi as usize] {
+                        h += sc.qidf[qi as usize];
+                    }
+                }
+                sc.hmat[gi * bu + rep] = h;
             }
         }
         let gexp = self.params.group_size_exponent;
@@ -794,58 +920,214 @@ impl<'m> Classifier<'m> {
                     .for_each(|x| *x *= scale);
             }
         }
-        let evaluated = vec![true; ng];
-
-        // totHits: per replicate, the group with the max hits (random ties,
-        // as R's max.col) receives hits/davg
         let mut tot = vec![0.0f64; ng];
+        let mut winners: Vec<u32> = Vec::new();
         for rep in 0..bu {
             let mut best = f64::NEG_INFINITY;
-            let mut nties = 0u32;
-            let mut pick = 0usize;
+            winners.clear();
             for gi in 0..ng {
-                if !evaluated[gi] {
-                    continue;
-                }
                 let v = sc.hmat[gi * bu + rep];
                 if v > best {
                     best = v;
-                    nties = 1;
-                    pick = gi;
+                    winners.clear();
+                    winners.push(gi as u32);
                 } else if v == best {
-                    nties += 1;
-                    // reservoir sampling for a uniform tie-break
-                    if rng.gen_range(0..nties) == 0 {
-                        pick = gi;
+                    winners.push(gi as u32);
+                }
+            }
+            Self::credit(best, &mut winners, davg, &mut tot, rng);
+        }
+        tot
+    }
+
+    /// Exact per-replicate winners with dominance pruning against the
+    /// leading group `L` (maximum total score). For a group `g`, let `gain`
+    /// be the query k-mers that `g`'s top sequence shares and `L`'s lacks
+    /// (plus k-mers `L` has with non-positive weight) and `loss` the
+    /// positive-weight k-mers `L` has and `g` lacks. In a replicate where no
+    /// `gain` k-mer was sampled but some `loss` k-mer was, `g` scores
+    /// strictly less than `L`, so it can neither win nor tie; only the
+    /// remaining replicates are scored exactly.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn winners_pruned(
+        &self,
+        _kmers: &[u32],
+        s: usize,
+        b: u32,
+        ng: usize,
+        epoch: u32,
+        davg: f64,
+        rng: &mut Xoshiro256PlusPlus,
+        sc: &mut Scratch,
+    ) -> Vec<f64> {
+        let m = self.model;
+        let nq = sc.counts.len();
+        let bu = b as usize;
+        let qw = nq.div_ceil(64);
+        let bw = bu.div_ceil(64);
+        // shared-k-mer bitsets of each group's top sequence
+        for &id in &sc.touched {
+            sc.acc[id as usize].top = u32::MAX;
+        }
+        for (gi, g) in sc.groups.iter().enumerate() {
+            sc.acc[g.seq as usize].top = gi as u32;
+        }
+        sc.shared.clear();
+        sc.shared.resize(ng * qw, 0);
+        sc.top_of_touched.clear();
+        sc.top_of_touched.resize(sc.touched.len(), u32::MAX);
+        for (gi, g) in sc.groups.iter().enumerate() {
+            sc.top_of_touched[sc.acc[g.seq as usize].ti as usize] = gi as u32;
+        }
+        for i in 0..nq {
+            let (word, bit) = (i / 64, 1u64 << (i % 64));
+            for &ti in &sc.pair_ti[sc.pair_off[i] as usize..sc.pair_off[i + 1] as usize] {
+                let gi = sc.top_of_touched[ti as usize];
+                if gi != u32::MAX {
+                    sc.shared[gi as usize * qw + word] |= bit;
+                }
+            }
+        }
+        // complement-stored k-mers: every top has them except those listed
+        if !sc.neg_kmers.is_empty() {
+            let mut mask = vec![0u64; qw];
+            for &i in &sc.neg_kmers {
+                mask[i as usize / 64] |= 1u64 << (i % 64);
+            }
+            for gi in 0..ng {
+                for w in 0..qw {
+                    sc.shared[gi * qw + w] |= mask[w];
+                }
+            }
+            for &i in &sc.neg_kmers {
+                let i = i as usize;
+                let (word, bit) = (i / 64, 1u64 << (i % 64));
+                let post = m.postings(sc.qslot[i] as usize);
+                for r in &sc.ranges {
+                    let a = post.partition_point(|&x| x < r.start);
+                    let z = a + post[a..].partition_point(|&x| x < r.end);
+                    for &id in &post[a..z] {
+                        let acc = sc.acc[id as usize];
+                        if acc.stamp == epoch {
+                            let gi = sc.top_of_touched[acc.ti as usize];
+                            if gi != u32::MAX {
+                                sc.shared[gi as usize * qw + word] &= !bit;
+                            }
+                        }
                     }
                 }
             }
-            if best > 0.0 {
-                tot[pick] += best / davg;
+        }
+        // replicate masks per query k-mer, positive-weight mask
+        sc.occ_mask.clear();
+        sc.occ_mask.resize(nq * bw, 0);
+        for (t, &qi) in sc.samp.iter().enumerate() {
+            let rep = t / s;
+            sc.occ_mask[qi as usize * bw + rep / 64] |= 1u64 << (rep % 64);
+        }
+        sc.posw.clear();
+        sc.posw.resize(qw, 0);
+        for i in 0..nq {
+            if sc.qidf[i] > 0.0 {
+                sc.posw[i / 64] |= 1u64 << (i % 64);
             }
         }
-        let maxt = tot.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let ties: Vec<usize> = (0..ng).filter(|&g| tot[g] == maxt).collect();
-        let sel = if ties.len() > 1 {
-            ties[rng.gen_range(0..ties.len())]
+        let full_last = if bu.is_multiple_of(64) {
+            u64::MAX
         } else {
-            ties[0]
+            (1u64 << (bu % 64)) - 1
         };
-        let sim: f64 = if evaluated[sel] {
-            sc.hmat[sel * bu..(sel + 1) * bu].iter().sum::<f64>() / davg
-        } else {
-            0.0
+        // exact replicate score from a bitset
+        let exact = |sc: &Scratch, gi: usize, rep: usize| -> f64 {
+            let bits = &sc.shared[gi * qw..(gi + 1) * qw];
+            let mut h = 0.0;
+            for &qi in &sc.samp[rep * s..(rep + 1) * s] {
+                let q = qi as usize;
+                if bits[q / 64] >> (q % 64) & 1 == 1 {
+                    h += sc.qidf[q];
+                }
+            }
+            h
         };
-        let tot_hits = (0..ng)
-            .filter(|&g| tot[g] > 0.0 || g == sel)
-            .map(|g| (sc.groups[g].group, tot[g]))
-            .collect();
-        Some(RunResult {
-            selected: sc.groups[sel].group,
-            tot_hits,
-            b,
-            sim,
-        })
+        // leader: maximum total score (first in group order on ties)
+        let mut lead = 0usize;
+        for gi in 1..ng {
+            if sc.groups[gi].score > sc.groups[lead].score {
+                lead = gi;
+            }
+        }
+        sc.best.clear();
+        sc.winners.resize_with(bu, Vec::new);
+        for rep in 0..bu {
+            let v = exact(sc, lead, rep);
+            sc.best.push(v);
+            sc.winners[rep].clear();
+            sc.winners[rep].push(lead as u32);
+        }
+        let mut cand = vec![0u64; bw];
+        let mut lossr = vec![0u64; bw];
+        for gi in 0..ng {
+            if gi == lead {
+                continue;
+            }
+            cand.iter_mut().for_each(|x| *x = 0);
+            lossr.iter_mut().for_each(|x| *x = 0);
+            let (gs, ls) = (gi * qw, lead * qw);
+            let mut loss_full = false;
+            for w in 0..qw {
+                let g = sc.shared[gs + w];
+                let l = sc.shared[ls + w];
+                let pw = sc.posw[w];
+                let mut gain = (g & !l & pw) | (l & !g & !pw);
+                while gain != 0 {
+                    let q = w * 64 + gain.trailing_zeros() as usize;
+                    gain &= gain - 1;
+                    for k in 0..bw {
+                        cand[k] |= sc.occ_mask[q * bw + k];
+                    }
+                }
+                if !loss_full {
+                    let mut loss = l & !g & pw;
+                    while loss != 0 {
+                        let q = w * 64 + loss.trailing_zeros() as usize;
+                        loss &= loss - 1;
+                        for k in 0..bw {
+                            lossr[k] |= sc.occ_mask[q * bw + k];
+                        }
+                    }
+                    loss_full = lossr[..bw - 1].iter().all(|&x| x == u64::MAX)
+                        && lossr[bw - 1] & full_last == full_last;
+                }
+            }
+            // candidate replicates: some gain sampled, or no loss sampled
+            for k in 0..bw {
+                let mut c = cand[k] | !lossr[k];
+                if k == bw - 1 {
+                    c &= full_last;
+                }
+                while c != 0 {
+                    let rep = k * 64 + c.trailing_zeros() as usize;
+                    c &= c - 1;
+                    let v = exact(sc, gi, rep);
+                    if v > sc.best[rep] {
+                        sc.best[rep] = v;
+                        sc.winners[rep].clear();
+                        sc.winners[rep].push(gi as u32);
+                    } else if v == sc.best[rep] {
+                        sc.winners[rep].push(gi as u32);
+                    }
+                }
+            }
+        }
+        let mut tot = vec![0.0f64; ng];
+        for rep in 0..bu {
+            let best = sc.best[rep];
+            let mut w = std::mem::take(&mut sc.winners[rep]);
+            Self::credit(best, &mut w, davg, &mut tot, rng);
+            sc.winners[rep] = w;
+        }
+        tot
     }
 
     /// IDF-weighted containment similarity of the query (best orientation
@@ -867,22 +1149,46 @@ impl<'m> Classifier<'m> {
         let mut denom = 0.0;
         let epoch = sc.next_epoch();
         sc.touched.clear();
+        let mut base = 0.0;
+        let mut negs: Vec<(usize, f64)> = Vec::new();
+        let mut pos: Vec<(usize, f64)> = Vec::new();
         for &x in &kmers {
-            let (slot, w) = match m.slot(x) {
-                Some(s) => (Some(s), m.slot_idf(s)),
-                None => (None, m.meta.idf_default),
-            };
-            denom += w;
-            if let Some(slot) = slot {
-                for &id in m.postings(slot) {
-                    let iu = id as usize;
-                    if sc.stamp[iu] != epoch {
-                        sc.stamp[iu] = epoch;
-                        sc.score[iu] = 0.0;
-                        sc.touched.push(id);
+            match m.slot(x) {
+                Some(s) => {
+                    let w = m.slot_idf(s);
+                    denom += w;
+                    if m.slot_is_complement(s) {
+                        base += w;
+                        negs.push((s, w));
+                    } else {
+                        pos.push((s, w));
                     }
-                    sc.score[iu] += w;
                 }
+                None => denom += m.meta.idf_default,
+            }
+        }
+        if !negs.is_empty() {
+            for id in 0..m.n_seqs() as u32 {
+                let a = &mut sc.acc[id as usize];
+                a.stamp = epoch;
+                a.score = base;
+                sc.touched.push(id);
+            }
+            for &(slot, w) in &negs {
+                for &id in m.postings(slot) {
+                    sc.acc[id as usize].score -= w;
+                }
+            }
+        }
+        for &(slot, w) in &pos {
+            for &id in m.postings(slot) {
+                let a = &mut sc.acc[id as usize];
+                if a.stamp != epoch {
+                    a.stamp = epoch;
+                    a.score = 0.0;
+                    sc.touched.push(id);
+                }
+                a.score += w;
             }
         }
         let mut prof = SimilarityProfile {
@@ -894,7 +1200,7 @@ impl<'m> Classifier<'m> {
         }
         let ranges: Vec<Range<u32>> = cls.lineage.iter().map(|&n| m.subtree(n)).collect();
         for &id in &sc.touched {
-            let v = sc.score[id as usize] / denom;
+            let v = sc.acc[id as usize].score / denom;
             if v > prof.max_reference {
                 prof.max_reference = v;
             }

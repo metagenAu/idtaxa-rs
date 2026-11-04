@@ -317,7 +317,7 @@ impl KmerEncoder {
 
 /// Decode a contiguous k-mer code into its string (for debugging/tests).
 pub fn decode_kmer(code: u32, k: usize) -> String {
-    const B: [u8; 4] = [b'A', b'C', b'G', b'T'];
+    const B: [u8; 4] = *b"ACGT";
     (0..k)
         .map(|j| B[((code >> (2 * j)) & 3) as usize] as char)
         .collect()

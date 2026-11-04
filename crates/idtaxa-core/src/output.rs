@@ -97,19 +97,16 @@ pub fn tsv_row(model: &Model, id: &str, seq_hash: u64, row: &ResultRow, cols: &C
             out.push_str(&format!("{:.4}", s.max_reference));
         }
         out.push('\t');
-        match row.novelty_depth {
-            Some(d) => {
-                // name the rank: deepest consistent rank of the lineage
-                let label = if d == 0 {
-                    "none".to_string()
-                } else if d + 1 >= c.lineage.len() {
-                    "known".to_string()
-                } else {
-                    rank_label(model, c.lineage[d])
-                };
-                out.push_str(&label);
-            }
-            None => {}
+        if let Some(d) = row.novelty_depth {
+            // first rank at which the query no longer matches a known taxon
+            // closely enough ("none" = consistent with the reference at
+            // every assigned rank)
+            let label = if d + 1 >= c.lineage.len() {
+                "none".to_string()
+            } else {
+                rank_label(model, c.lineage[d + 1])
+            };
+            out.push_str(&label);
         }
     }
     out.push('\t');

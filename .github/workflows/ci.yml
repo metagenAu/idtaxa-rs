@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests (includes parity against cached DECIPHER 3.9.4 outputs in tests/data)
+        run: cargo test --release
+      - name: Parity report on the fixture
+        run: |
+          ./target/release/idtaxa import-decipher --input tests/data/decipher_mini_export --output mini.idtx
+          ./target/release/idtaxa classify --model mini.idtx --input tests/data/mini_queries.fasta --output mini_rs.tsv --full-confidences
+          python3 scripts/compare.py tests/data/decipher_mini_seed1.tsv mini_rs.tsv \
+            --baseline tests/data/decipher_mini_seed2.tsv --label-a DECIPHER --label-b idtaxa-rs \
+            --truth tests/data/mini_queries_truth.tsv

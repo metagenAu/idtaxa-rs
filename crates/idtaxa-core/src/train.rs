@@ -298,7 +298,8 @@ pub fn train<S: AsRef<[u8]> + Sync>(
             "sequences, lineages and names must have equal length".into(),
         ));
     }
-    if !(opts.min_fraction > 0.0)
+    if opts.min_fraction <= 0.0
+        || opts.min_fraction.is_nan()
         || opts.max_fraction <= opts.min_fraction
         || opts.max_fraction >= 1.0
     {
@@ -306,7 +307,11 @@ pub fn train<S: AsRef<[u8]> + Sync>(
             "require 0 < minFraction < maxFraction < 1".into(),
         ));
     }
-    if opts.max_iterations < 1 || opts.max_children < 1 || !(opts.multiplier > 0.0) {
+    if opts.max_iterations < 1
+        || opts.max_children < 1
+        || opts.multiplier <= 0.0
+        || opts.multiplier.is_nan()
+    {
         return Err(Error::InvalidParameter(
             "maxIterations, maxChildren and multiplier must be positive".into(),
         ));

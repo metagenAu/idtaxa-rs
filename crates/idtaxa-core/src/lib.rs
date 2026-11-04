@@ -4,6 +4,8 @@
 //!
 //! Licensed GPL-3.0-or-later (a port of GPL-3 DECIPHER source).
 
+#![allow(clippy::needless_range_loop)] // index-heavy numeric kernels read clearer with ranges
+
 pub mod balance;
 pub mod calibration;
 pub mod classify;

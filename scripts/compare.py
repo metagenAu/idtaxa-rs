@@ -176,13 +176,21 @@ def main():
     ap.add_argument("--label-a", default="A")
     ap.add_argument("--label-b", default="B")
     ap.add_argument("--json")
+    ap.add_argument("--id-regex", help="only compare ids matching this regular expression")
     args = ap.parse_args()
     a, b = load(args.a), load(args.b)
+    if args.id_regex:
+        import re
+        rx = re.compile(args.id_regex)
+        a = {k: v for k, v in a.items() if rx.search(k)}
+        b = {k: v for k, v in b.items() if rx.search(k)}
     md = max(max((len(x[0]) for x in a.values()), default=0), max((len(x[0]) for x in b.values()), default=0))
     report = {"threshold": args.threshold, "a_vs_b": compare(a, b, args.threshold, md)}
     print(fmt(report["a_vs_b"], args.label_a, args.label_b))
     if args.baseline:
         a2 = load(args.baseline)
+        if args.id_regex:
+            a2 = {k: v for k, v in a2.items() if rx.search(k)}
         report["a_vs_a2"] = compare(a, a2, args.threshold, md)
         print()
         print(fmt(report["a_vs_a2"], args.label_a, args.label_a + " (second seed)"))

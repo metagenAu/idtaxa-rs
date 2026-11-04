@@ -1,5 +1,7 @@
 //! `idtaxa` command-line interface.
 
+#![allow(clippy::needless_range_loop)]
+
 mod cache;
 mod classify_cmd;
 mod tools;
@@ -81,6 +83,13 @@ enum Cmd {
         model: PathBuf,
         #[arg(long = "ref")]
         reference: PathBuf,
+    },
+    /// Compare two models built from the same reference (e.g. native vs DECIPHER-trained)
+    CompareModels {
+        #[arg(long)]
+        a: PathBuf,
+        #[arg(long)]
+        b: PathBuf,
     },
     /// In-silico PCR: extract the amplicon region from reference sequences
     ExtractRegion(tools::ExtractArgs),
@@ -195,6 +204,7 @@ struct ClassifyArgs {
     balance_exponent: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn classify_params_from(
     threshold: f64,
     bootstraps: u32,
@@ -305,6 +315,11 @@ fn main() -> Result<()> {
         Cmd::Split(a) => tools::split(a, quiet)?,
         Cmd::Info { model, detailed } => info(&model, detailed)?,
         Cmd::KmerCheck { model, reference } => kmer_check(&model, &reference)?,
+        Cmd::CompareModels { a, b } => {
+            let (ma, mb) = (Model::load(&a)?, Model::load(&b)?);
+            let c = idtaxa_core::model::compare_models(&ma, &mb);
+            println!("{}", serde_json::to_string_pretty(&c)?);
+        }
         Cmd::ExtractRegion(a) => tools::extract_region(a, quiet)?,
         Cmd::CleanRef(a) => tools::clean_ref(a, quiet)?,
         Cmd::Consensus(a) => tools::consensus(a, quiet)?,
@@ -385,7 +400,7 @@ pub fn default_spaced_pattern(k: usize) -> String {
     s
 }
 
-fn info(path: &PathBuf, detailed: bool) -> Result<()> {
+fn info(path: &std::path::Path, detailed: bool) -> Result<()> {
     let m = Model::load(path)?;
     let size = std::fs::metadata(path)?.len();
     println!("file\t{}", path.display());
@@ -436,7 +451,7 @@ fn info(path: &PathBuf, detailed: bool) -> Result<()> {
     Ok(())
 }
 
-fn kmer_check(model: &PathBuf, reference: &PathBuf) -> Result<()> {
+fn kmer_check(model: &std::path::Path, reference: &std::path::Path) -> Result<()> {
     let m = Model::load(model)?;
     let recs = idtaxa_core::io::read_all(reference)?;
     let enc = m.encoder();

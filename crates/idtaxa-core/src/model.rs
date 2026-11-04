@@ -214,6 +214,9 @@ pub struct Model {
     idx_off: Arr<u64>,
     idx_post: Arr<u32>,
     idx_idf: Arr<f64>,
+    /// 1 if the slot stores the complement (training sequences *lacking*
+    /// the k-mer) because it occurs in more than half of them
+    idx_neg: Arr<u8>,
     dense_slot: Arr<u32>,
 }
 
@@ -374,6 +377,7 @@ impl Model {
 
         // inverted index
         let (keys, idx_off, idx_post) = build_index(&seq_off, &seq_kmers, raw.k)?;
+        let (idx_off, idx_post, idx_neg) = complement_frequent(&idx_off, &idx_post, n_seqs);
 
         // IDF
         let (idx_idf, idf_default, n_classes) = match &raw.idf_dense {
@@ -491,6 +495,7 @@ impl Model {
             idx_keys: keys.into(),
             idx_off: idx_off.into(),
             idx_post: idx_post.into(),
+            idx_neg: idx_neg.into(),
             idx_idf: idx_idf.into(),
             dense_slot: dense_slot.into(),
         };
@@ -522,6 +527,7 @@ impl Model {
             ("idx_off", "u64", b(&self.idx_off)),
             ("idx_post", "u32", b(&self.idx_post)),
             ("idx_idf", "f64", b(&self.idx_idf)),
+            ("idx_neg", "u8", b(&self.idx_neg)),
             ("dense_slot", "u32", b(&self.dense_slot)),
         ]
     }
@@ -560,6 +566,7 @@ impl Model {
             pos += pad;
             let size = match dtype {
                 "u64" | "f64" => 8,
+                "u8" => 1,
                 _ => 4,
             };
             sections.push(Section {
@@ -635,7 +642,7 @@ impl Model {
                 .ok_or_else(|| Error::InvalidModel(format!("missing section {name}")))?;
             let off = s.offset as usize;
             let len = s.len as usize;
-            if off % ALIGN != 0 || off + len * size > meta_off {
+            if !off.is_multiple_of(ALIGN) || off + len * size > meta_off {
                 return Err(Error::InvalidModel(format!("corrupt section {name}")));
             }
             Ok((off, len))
@@ -671,6 +678,7 @@ impl Model {
             idx_off: arr!("idx_off", u64),
             idx_post: arr!("idx_post", u32),
             idx_idf: arr!("idx_idf", f64),
+            idx_neg: arr!("idx_neg", u8),
             dense_slot: arr!("dense_slot", u32),
             meta,
         };
@@ -695,6 +703,7 @@ impl Model {
             && self.meta.seq_names.len() == ns
             && self.idx_off.len() == self.idx_keys.len() + 1
             && self.idx_idf.len() == self.idx_keys.len()
+            && self.idx_neg.len() == self.idx_keys.len()
             && *self.child_off.last().unwrap() as usize == self.child.len()
             && *self.seq_off.last().unwrap() as usize == self.seq_kmers.len()
             && *self.idx_off.last().unwrap() as usize == self.idx_post.len()
@@ -828,6 +837,32 @@ impl Model {
         &self.idx_post[self.idx_off[slot] as usize..self.idx_off[slot + 1] as usize]
     }
 
+    /// Whether the slot's list holds the training sequences that *lack*
+    /// the k-mer (stored for k-mers in more than half of the sequences).
+    #[inline]
+    pub fn slot_is_complement(&self, slot: usize) -> bool {
+        self.idx_neg[slot] != 0
+    }
+
+    /// Sequences (native IDs, sorted) containing the k-mer of a slot,
+    /// materialised (expands complement lists).
+    pub fn containing(&self, slot: usize) -> Vec<u32> {
+        let p = self.postings(slot);
+        if !self.slot_is_complement(slot) {
+            return p.to_vec();
+        }
+        let mut out = Vec::with_capacity(self.n_seqs() - p.len());
+        let mut j = 0;
+        for id in 0..self.n_seqs() as u32 {
+            if j < p.len() && p[j] == id {
+                j += 1;
+            } else {
+                out.push(id);
+            }
+        }
+        out
+    }
+
     /// IDF weight of an index slot.
     #[inline]
     pub fn slot_idf(&self, slot: usize) -> f64 {
@@ -936,6 +971,34 @@ impl Model {
     }
 }
 
+/// Replace the postings of k-mers present in more than half of the
+/// training sequences by their complement (sequences lacking the k-mer).
+fn complement_frequent(off: &[u64], post: &[u32], n_seqs: usize) -> (Vec<u64>, Vec<u32>, Vec<u8>) {
+    let nk = off.len() - 1;
+    let mut new_off = Vec::with_capacity(off.len());
+    let mut new_post = Vec::with_capacity(post.len());
+    let mut neg = vec![0u8; nk];
+    new_off.push(0u64);
+    for k in 0..nk {
+        let p = &post[off[k] as usize..off[k + 1] as usize];
+        if p.len() * 2 > n_seqs {
+            neg[k] = 1;
+            let mut j = 0;
+            for id in 0..n_seqs as u32 {
+                if j < p.len() && p[j] == id {
+                    j += 1;
+                } else {
+                    new_post.push(id);
+                }
+            }
+        } else {
+            new_post.extend_from_slice(p);
+        }
+        new_off.push(new_post.len() as u64);
+    }
+    (new_off, new_post, neg)
+}
+
 /// Build CSR inverted index (sorted keys, offsets, postings) from CSR
 /// per-sequence k-mer lists.
 fn build_index(
@@ -997,4 +1060,113 @@ fn build_index(
         }
         Ok((keys, off, post))
     }
+}
+
+/// Differences between two models built from the same reference (used to
+/// compare native training with DECIPHER's `LearnTaxa`).
+#[derive(Clone, Debug, Serialize)]
+pub struct ModelComparison {
+    pub same_k: bool,
+    pub same_taxonomy: bool,
+    pub nodes_with_decision_kmers: (usize, usize),
+    pub identical_decision_kmer_sets: usize,
+    pub mean_decision_kmer_jaccard: f64,
+    pub max_decision_weight_diff: f64,
+    pub fraction_mean_abs_diff: f64,
+    pub fraction_na: (usize, usize),
+    pub fraction_na_both: usize,
+    pub max_idf_diff: f64,
+    pub problem_sequences: (usize, usize),
+    pub problem_sequences_shared: usize,
+    pub problem_groups: (usize, usize),
+    pub problem_groups_shared: usize,
+}
+
+/// Compare two models node by node.
+pub fn compare_models(a: &Model, b: &Model) -> ModelComparison {
+    let same_taxonomy = a.taxonomy == b.taxonomy;
+    let mut c = ModelComparison {
+        same_k: a.k() == b.k(),
+        same_taxonomy,
+        nodes_with_decision_kmers: (0, 0),
+        identical_decision_kmer_sets: 0,
+        mean_decision_kmer_jaccard: f64::NAN,
+        max_decision_weight_diff: 0.0,
+        fraction_mean_abs_diff: f64::NAN,
+        fraction_na: (
+            a.fraction.iter().filter(|x| x.is_nan()).count(),
+            b.fraction.iter().filter(|x| x.is_nan()).count(),
+        ),
+        fraction_na_both: 0,
+        max_idf_diff: 0.0,
+        problem_sequences: (
+            a.meta.problem_sequences.len(),
+            b.meta.problem_sequences.len(),
+        ),
+        problem_sequences_shared: 0,
+        problem_groups: (a.meta.problem_groups.len(), b.meta.problem_groups.len()),
+        problem_groups_shared: 0,
+    };
+    let pa: std::collections::HashSet<u32> =
+        a.meta.problem_sequences.iter().map(|p| p.index).collect();
+    c.problem_sequences_shared = b
+        .meta
+        .problem_sequences
+        .iter()
+        .filter(|p| pa.contains(&p.index))
+        .count();
+    let ga: std::collections::HashSet<&String> = a.meta.problem_groups.iter().collect();
+    c.problem_groups_shared = b
+        .meta
+        .problem_groups
+        .iter()
+        .filter(|g| ga.contains(g))
+        .count();
+    if !same_taxonomy {
+        return c;
+    }
+    let (mut jsum, mut jn, mut fsum, mut fn_) = (0.0, 0usize, 0.0, 0usize);
+    for i in 0..a.n_nodes() as u32 {
+        let (ka, wa) = a.decision(i);
+        let (kb, wb) = b.decision(i);
+        if !ka.is_empty() {
+            c.nodes_with_decision_kmers.0 += 1;
+        }
+        if !kb.is_empty() {
+            c.nodes_with_decision_kmers.1 += 1;
+        }
+        if !ka.is_empty() || !kb.is_empty() {
+            let sa: std::collections::HashSet<u32> = ka.iter().copied().collect();
+            let inter = kb.iter().filter(|x| sa.contains(x)).count();
+            let uni = ka.len() + kb.len() - inter;
+            jsum += inter as f64 / uni as f64;
+            jn += 1;
+            if ka == kb {
+                c.identical_decision_kmer_sets += 1;
+                for (x, y) in wa.iter().zip(wb) {
+                    c.max_decision_weight_diff = c.max_decision_weight_diff.max((x - y).abs());
+                }
+            }
+        }
+        let (fa, fb) = (a.fraction(i), b.fraction(i));
+        if fa.is_nan() && fb.is_nan() {
+            c.fraction_na_both += 1;
+        } else if !fa.is_nan() && !fb.is_nan() {
+            fsum += (fa - fb).abs();
+            fn_ += 1;
+        }
+    }
+    if jn > 0 {
+        c.mean_decision_kmer_jaccard = jsum / jn as f64;
+    }
+    if fn_ > 0 {
+        c.fraction_mean_abs_diff = fsum / fn_ as f64;
+    }
+    if a.k() == b.k() {
+        let (da, db) = (a.idf_dense(), b.idf_dense());
+        for (x, y) in da.iter().zip(&db) {
+            c.max_idf_diff = c.max_idf_diff.max((x - y).abs());
+        }
+    }
+    c
 }
