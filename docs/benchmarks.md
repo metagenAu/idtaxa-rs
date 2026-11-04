@@ -132,15 +132,17 @@ with natural duplication.
 |---|---|---|
 | 10,000 | 26.7 s | 58 MB |
 | 100,000 | 241.9 s | 123 MB |
-| 1,000,000 | ONE_M_TIME | ONE_M_RSS |
+| 1,000,000 (869,821 distinct after per-batch dereplication) | 2,404 s (416 queries/s) | 128 MB |
 
 Peak memory is bounded by the batch size, not the input size: 58 MB for
-10k queries in a single partial batch, then flat once batches are full.
-With `--batch-size 1000`, 100k queries ran in BATCH1000_RSS with
-byte-identical output (BATCH1000_NOTE). The 50k reference at 100k queries
-ran in Q100K50K. A cached re-run of 100k queries (`--cache`) took
-CACHE_TIME and gave identical output. Loading the 50k model
-(MODEL_SIZE file) with `info` takes INFO_TIME through mmap.
+10k queries (a single partial batch), then flat at 123–128 MB from 100k to
+1M queries. With `--batch-size 1000`, 100k queries ran in 46 MB peak with
+byte-identical output (314 s instead of 242 s, from less
+dereplication and parallel slack). The first 100k rows of the 1M run are
+byte-identical to the separate 100k run. A cached re-run of 10k queries
+(`--cache`) took 0.08 s and gave identical output. `info` on the 50k model
+(177 MB file) takes 0.96 s, including computing its statistics; loading
+itself is an `mmap`.
 
 ### Speed target
 
